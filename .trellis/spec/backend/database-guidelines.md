@@ -1,51 +1,92 @@
 # Database Guidelines
 
-> Database patterns and conventions for this project.
+## Scenario: M0 Ledger Domain and Database
 
----
+### 1. Scope / Trigger
 
-## Overview
+This contract applies to the SQLite ledger schema, SQLAlchemy ORM models, Alembic
+migrations, and services that mutate `Trade`, `Lot`, `TradeMatch`, or `Cycle`.
+The accounting boundary must preserve Decimal values exactly and every fact/state
+change must remain auditable.
 
-<!--
-Document your project's database conventions here.
+### 2. Signatures
 
-Questions to answer:
-- What ORM/query library do you use?
-- How are migrations managed?
-- What are the naming conventions for tables/columns?
-- How do you handle transactions?
--->
+- `ExactDecimal(scale: int)` stores fixed-scale text and returns `Decimal`.
+- `TradeLedgerService.buy(..., qty, price, fees, client_request_id, commit=True) -> Trade`.
+- `TradeLedgerService.sell(..., qty, price, matches=None, fees, client_request_id, commit=True) -> Trade`.
+- `TradeLedgerService.void_trade(trade_id, reason=None, commit=True) -> Trade`.
+- `MatchingService.allocate(lots_by_id, requests, sell_qty, sell_cash_in, ...) -> list[MatchAllocation]`.
 
-(To be filled by the team)
+### 3. Contracts
 
----
+- Tables use lower snake case. IDs are UUID strings. Decimal columns use
+  `ExactDecimal(4)` for quantity/amount and `ExactDecimal(6)` for price/rates.
+- `trades.client_request_id` is unique per account for idempotent submissions.
+- Buy cash out is `round_4(price * qty) + fees`; sell cash in is
+  `round_4(price * qty) - fees`.
+- FIFO ordering is `(executed_at, created_at, id)`; manual matches must total the
+  sell quantity and belong to the same account/security/strategy.
+- A final match consumes the lot's current remaining cost; partial matches use
+  `round_4(original_cost * matched_qty / original_qty)`. Sell-net tail rounding
+  goes to the final match.
+- SQLite connections enable `foreign_keys=ON` and `journal_mode=WAL`.
+- State changes emit `audit_events` for `TRADE`, `LOT`, and `CYCLE` entities in the
+  same session transaction.
+- `DATABASE_URL` and `ECHO_SQL` are optional environment keys; defaults are
+  `sqlite:///./ledger.db` and disabled SQL echo.
 
-## Query Patterns
+### 4. Validation & Error Matrix
 
-<!-- How should queries be written? Batch operations? -->
+| Condition | Required result |
+|---|---|
+| Quantity or price is non-positive | `InvalidQuantityError` / `InvalidPriceError` or `ValidationError` |
+| Fee is negative, NaN, or infinite | `NegativeFeeError` / `TypeError` / `ValueError` |
+| Manual match quantity differs from sell quantity | `MatchQuantityMismatchError` |
+| Lot has insufficient quantity | `InsufficientLotQtyError` |
+| Lot scope differs from sell scope | `LotOwnershipError` |
+| Lot was bought after the sell | `FutureLotError` |
+| Buy with active sell matches is voided | `LotHasActiveMatchesError` |
+| Duplicate account/client request | Return the existing trade without adding rows |
 
-(To be filled by the team)
+### 5. Good / Base / Bad Cases
 
----
+- Good: buy 1,000 at 10, then sell 1,000 at 11; the lot closes and realized
+  P&L is 1,000 before fees.
+- Base: sell across two lots; the final allocated sell-net absorbs all rounding
+  residue and total allocated net equals sell cash in exactly.
+- Bad: query SQLite text-backed `remaining_qty` with SQL `> 0`; load Decimal
+  values and filter in Python instead.
 
-## Migrations
+### 6. Tests Required
 
-<!-- How to create and run migrations -->
+- Alembic `upgrade head` and `downgrade base` on SQLite.
+- Unit tests for precision rejection, FIFO/manual validation, tail allocation,
+  target price solving, and the documented Section 6 cases.
+- Hypothesis tests assert match quantity conservation, allocated sell-net
+  conservation, and lot cost plus remaining cost conservation.
+- Integration tests assert buy/sell/void state, idempotency, and `AuditEvent`
+  rows for Trade/Lot/Cycle changes.
 
-(To be filled by the team)
+### 7. Wrong vs Correct
 
----
+#### Wrong
 
-## Naming Conventions
+```python
+session.scalars(select(Lot).where(Lot.remaining_qty > 0))
+```
 
-<!-- Table names, column names, index names -->
+#### Correct
 
-(To be filled by the team)
+```python
+lots = list(session.scalars(select(Lot).where(Lot.status == "OPEN")))
+lots = [lot for lot in lots if lot.remaining_qty > 0]
+```
 
----
+SQLite stores `ExactDecimal` as text, so numeric filtering belongs in Python.
 
-## Common Mistakes
+## Naming and Migration Rules
 
-<!-- Database-related mistakes your team has made -->
-
-(To be filled by the team)
+- Use singular model names and plural table names (`Trade` / `trades`).
+- Add schema changes through a new Alembic revision; never edit an applied
+  revision in place.
+- Keep unique constraints and indexes named explicitly (`uq_*`, `ix_*`).
