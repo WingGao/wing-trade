@@ -1,0 +1,3 @@
+{"file": "docs/feat/ashare_personal_trading_spec.md", "reason": "Verify UI requirements (§10), E2E cases (§14.3), and MVP DoD (§14.4)"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer consistency check"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend quality guidelines"}
