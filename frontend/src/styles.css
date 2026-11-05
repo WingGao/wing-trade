@@ -1,0 +1,18 @@
+:root { color: #182230; background: #f4f7fb; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 1080px; }
+.shell { min-height: 100vh; }
+.sidebar { background: #111827; display: flex; flex-direction: column; padding: 24px 14px; }
+.brand { color: white; display:flex; gap:10px; align-items:center; padding: 4px 12px 30px; }
+.brand strong { display:block; font-size:15px; letter-spacing:.04em; }.brand small { display:block; color:#718096; font-size:10px; margin-top:3px; }
+.brand-mark { display:grid; place-items:center; width:34px; height:34px; border-radius:10px; background:#f05a47; font-weight:700; }
+.nav { border:0; }.nav .el-menu-item { border-radius:9px; margin:4px 0; }.nav .el-menu-item.is-active { background:#293548; }
+.sidebar-foot { margin-top:auto; color:#66758e; font-size:11px; padding:12px; line-height:1.6; }
+.topbar { height:84px; background:#fff; border-bottom:1px solid #e9edf3; display:flex; align-items:center; justify-content:space-between; padding:0 30px; }
+.topbar h1 { margin:2px 0 0; font-size:24px; }.eyebrow { color:#7b8798; font-size:12px; }.main { padding:28px 30px; }
+.page-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; }.page-head h2 { margin:0 0 6px; font-size:25px; }.muted { color:#8290a3; font-size:13px; }
+.metric-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:20px; }.metric-card { border:0; box-shadow:0 4px 18px #1822300b; }.metric-label { color:#7d899b; font-size:12px; }.metric-value { font-size:25px; font-weight:700; margin-top:8px; }.metric-value.positive { color:#e34d3c; }.metric-value.negative { color:#1c9c67; }
+.panel { border:0; box-shadow:0 4px 18px #1822300b; margin-bottom:20px; }.panel-title { font-weight:700; }.toolbar { display:flex; gap:10px; align-items:center; }
+.quote-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }.quote-card { padding:14px; border:1px solid #edf0f4; border-radius:10px; background:#fff; }.quote-symbol { font-weight:700; }.quote-price { font-size:20px; font-weight:700; margin:10px 0 4px; }.quote-change.up { color:#e34d3c; }.quote-change.down { color:#199868; }.stale { color:#d99014; }
+.security-link { color:#2563eb; text-decoration:none; font-weight:600; }.empty { padding:36px; text-align:center; color:#8b98aa; }
+@media (max-width: 1200px) { body { min-width: 900px; }.metric-grid { grid-template-columns:repeat(2,1fr); }.quote-grid { grid-template-columns:repeat(2,1fr); } }

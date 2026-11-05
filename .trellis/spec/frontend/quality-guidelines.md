@@ -1,51 +1,40 @@
-# Quality Guidelines
+# Frontend Quality Guidelines
 
-> Code quality standards for frontend development.
+## Scope / Trigger
 
----
-
-## Overview
-
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
-
----
+These rules apply to the Vue 3 + TypeScript + Pinia workbench and its API
+boundary. The UI presents server-derived ledger values and must keep quote
+failures separate from ledger failures.
 
 ## Required Patterns
 
-<!-- Patterns that must always be used -->
+- Keep REST DTOs in src/api/types.ts and use the shared client wrapper.
+- Keep account, quote, and preference state in Pinia stores; pages coordinate
+  stores and route navigation.
+- Render quote source time and an explicit stale/unavailable state beside prices.
+- Send sell previews to the server before submitting a sell and include a
+  unique client request ID.
+- Keep settled lots behind the includeClosed preference while preserving the
+  server summary values.
 
-(To be filled by the team)
+## Forbidden Patterns
 
----
+- Do not calculate ledger P&L or matching allocations in Vue components.
+- Do not convert exact monetary strings to binary floating point for display
+  calculations that affect a request.
+- Do not hide quote errors by replacing prices with zero.
+- Do not submit a sell without a preview or reuse a client request ID.
 
 ## Testing Requirements
 
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
-
----
+- pnpm run type-check and pnpm run build must pass.
+- Playwright covers navigation, offline quote rendering, settled-lot toggling,
+  and the core buy/sell/target flow when a backend fixture is available.
+- API client errors must leave ledger pages usable when the quote endpoint fails.
 
 ## Code Review Checklist
 
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+- Check route paths against the backend API aliases and response field names.
+- Check that stale quote labels are visible and do not disable ledger actions.
+- Check that all interactive dialogs expose loading and error feedback.
+- Check Docker and nginx proxy paths before changing deployment files.
