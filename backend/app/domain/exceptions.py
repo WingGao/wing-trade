@@ -56,5 +56,9 @@ class TradeNotFoundError(DomainError):
     code = "TRADE_NOT_FOUND"
 
 
+class EntityNotFoundError(DomainError):
+    code = "NOT_FOUND"
+
+
 class UnsupportedOperationError(DomainError):
     code = "UNSUPPORTED_OPERATION"

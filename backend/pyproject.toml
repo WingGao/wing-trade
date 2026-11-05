@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "A-share personal trading ledger domain and database"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi>=0.115,<1.0",
   "SQLAlchemy>=2.0,<3.0",
   "alembic>=1.13,<2.0",
   "pydantic>=2.0,<3.0",
@@ -18,6 +19,7 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "hypothesis>=6.90",
+  "httpx>=0.27",
   "ruff>=0.6",
   "mypy>=1.8",
 ]
