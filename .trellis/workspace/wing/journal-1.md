@@ -50,3 +50,25 @@ Implemented FastAPI /api/v1 ledger routes, Pydantic contracts, standard errors, 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: M1 market quote cache implementation
+<!-- trellis-session: v=2 fp=278d0096247795b9 -->
+
+**Date**: 2026-11-05
+**Task**: M1 market quote cache implementation
+**Branch**: `master`
+
+### Summary
+
+Implemented pluggable quote providers with AKShare and mock/fallback adapters, A-share session calendar, shared QuoteCache service, stale detection, single-flight refresh, refresh throttling, circuit breaker backoff, target trigger gating, /api/v1/quotes, and market quote integration tests. Compileall and git diff checks passed; pytest, ruff, and mypy were unavailable because dependencies are not installed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c89659a` | feat: add M1 market quote cache |
+
+### Status
+
+[OK] **Completed**
