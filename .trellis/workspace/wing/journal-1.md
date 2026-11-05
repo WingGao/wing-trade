@@ -28,3 +28,25 @@ Implemented the SQLite/Alembic ledger schema, Decimal-only accounting and matchi
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: M0 ledger REST API implementation
+<!-- trellis-session: v=2 fp=9f0c953a789f85f5 -->
+
+**Date**: 2026-11-05
+**Task**: M0 ledger REST API implementation
+**Branch**: `master`
+
+### Summary
+
+Implemented FastAPI /api/v1 ledger routes, Pydantic contracts, standard errors, SQLite write serialization, idempotent buy/sell flows, positions/lots/cycles/targets/analytics queries, health/readiness endpoints, request logging, and API integration coverage. Compileall and git diff checks passed; pytest, ruff, mypy, and runtime import checks were unavailable because dependencies are not installed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3633a69` | feat: add M0 ledger REST API |
+
+### Status
+
+[OK] **Completed**
