@@ -18,6 +18,7 @@ from app.domain.enums import CalcBasis, MatchingMethod, TradeSide, TradeStatus
 from app.domain.exceptions import EntityNotFoundError, ValidationError
 from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_qty
+from app.market_data import MockQuoteProvider, QuoteCollector
 from app.models.ledger import (
     Cycle,
     Lot,
@@ -33,6 +34,9 @@ from app.services.cycle import CycleService
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
 from app.services.target import TargetService
+
+
+quote_collector = QuoteCollector(MockQuoteProvider())
 
 router = APIRouter(prefix="/api/v1")
 
@@ -445,4 +449,43 @@ def analytics_summary(account_id: str | None = Query(default=None, alias="accoun
             have_quote = True
             unrealized += quote.last_price * lot.remaining_qty - lot.remaining_cost
     return {"totalBuyCashOut": _fmt(buy_cash), "totalSellCashIn": _fmt(sell_cash), "realizedPnl": _fmt(realized), "unrealizedPnl": _fmt(round_amount(unrealized)) if have_quote else None, "remainingQty": _fmt(remaining_qty), "remainingCost": _fmt(remaining_cost)}
+
+
+@router.get("/quotes")
+async def list_quotes(
+    symbols: str | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return shared cache snapshots; refreshes are serialized by QuoteCollector."""
+    quote_service = quote_collector.service
+    if symbols:
+        requested = [value.strip() for value in symbols.split(",") if value.strip()]
+        security_map = quote_service.securities_for_symbols(session, requested)
+        securities = list(security_map.values())
+    else:
+        security_map = quote_service.symbols_for_scope(session)
+        securities = list(security_map.values())
+        requested = list(security_map)
+    snapshots = await quote_collector.collect(session, securities, refresh=refresh)
+    by_symbol = {snapshot.symbol: snapshot for snapshot in snapshots}
+    items: list[dict[str, Any]] = []
+    for symbol in requested:
+        canonical = symbol.upper()
+        security = security_map.get(canonical)
+        snapshot = by_symbol.get(canonical)
+        items.append(
+            {
+                "symbol": canonical,
+                "securityId": security.id if security is not None else None,
+                "lastPrice": _fmt(snapshot.last_price, 6) if snapshot else None,
+                "prevClose": _fmt(snapshot.prev_close, 6) if snapshot else None,
+                "changePct": _fmt(snapshot.change_pct, 6) if snapshot else None,
+                "sourceTime": _dt(snapshot.source_time) if snapshot else None,
+                "fetchedAt": _dt(snapshot.fetched_at) if snapshot else None,
+                "provider": snapshot.provider if snapshot else None,
+                "isStale": True if snapshot is None else snapshot.is_stale,
+            }
+        )
+    return {"quotes": items}
 
