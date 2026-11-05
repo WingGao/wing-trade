@@ -72,3 +72,26 @@ Implemented pluggable quote providers with AKShare and mock/fallback adapters, A
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: M1 frontend MVP workbench and deployment
+<!-- trellis-session: v=2 fp=564514e8d576c8c0 -->
+
+**Date**: 2026-11-05
+**Task**: M1 frontend MVP workbench and deployment
+**Branch**: `master`
+
+### Summary
+
+Implemented Vue 3 + TypeScript + Vite + Element Plus + Pinia portfolio workbench with dashboard, security detail, lot/settled views, buy/sell preview dialogs, profit targets, trades and analytics pages, typed API client, quote stale indicators, Compose/Docker/nginx deployment, README, and Playwright E2E coverage. Type-check, production build, Playwright 2-test suite, and docker compose config passed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a613853` | feat: add frontend MVP workbench |
+| `35eb25f` | chore: ignore Playwright artifacts |
+
+### Status
+
+[OK] **Completed**
