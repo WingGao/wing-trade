@@ -1,4 +1,4 @@
-import type { AnalyticsSummary, ApiError, Lot, Position, ProfitTarget, Quote, Security, SellPreview, Trade } from './types'
+import type { Account, AnalyticsSummary, ApiError, Lot, Position, ProfitTarget, Quote, Security, SellPreview, Trade } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
@@ -22,11 +22,13 @@ const query = (params: Record<string, string | number | boolean | undefined>) =>
 }
 
 export const api = {
+  accounts: () => request<Account[]>('/accounts'),
+  createAccount: (payload: Record<string, unknown>) => request<Account>('/accounts', { method: 'POST', body: JSON.stringify(payload) }),
   positions: (includeClosed = false) => request<Position[]>(`/positions?${query({ includeClosed })}`),
   summary: () => request<AnalyticsSummary>(`/analytics/summary`),
   quotes: (symbols?: string[], refresh = false) => request<{ quotes: Quote[] }>(`/quotes?${query({ symbols: symbols?.join(','), refresh })}`),
   securities: (search = '') => request<Security[]>(`/securities?${query({ query: search })}`),
-  lots: (securityId: string, includeClosed = false) => request<{ lots: Lot[]; closedLotCount: number; realizedPnl: string }>(`/securities/${securityId}/lots?${query({ includeClosed })}`),
+  lots: (securityId: string, includeClosed = false, accountId?: string) => request<{ lots: Lot[]; closedLotCount: number; realizedPnl: string }>(`/securities/${securityId}/lots?${query({ includeClosed, accountId })}`),
   trades: () => request<Trade[]>('/trades'),
   cycles: (securityId?: string) => request<unknown[]>(`/cycles?${query({ securityId, includeClosed: true })}`),
   previewSell: (payload: Record<string, unknown>) => request<SellPreview>('/trades/sell/preview', { method: 'POST', body: JSON.stringify(payload) }),

@@ -1,3 +1,10 @@
+export interface Account {
+  id: string
+  name: string
+  currency: 'CNY' | 'USD'
+  broker?: string | null
+}
+
 export interface Security {
   id: string
   market: string
@@ -5,6 +12,7 @@ export interface Security {
   name?: string | null
   securityType?: string
   status?: string
+  currency?: 'CNY' | 'USD'
 }
 
 export interface Quote {
@@ -17,10 +25,14 @@ export interface Quote {
   fetchedAt?: string | null
   provider?: string | null
   isStale: boolean
+  market?: string | null
+  currency?: 'CNY' | 'USD' | null
 }
 
 export interface Position {
   securityId: string
+  market?: string | null
+  currency?: 'CNY' | 'USD' | null
   strategyId: string
   remainingQty: string
   remainingCost: string
@@ -78,6 +90,7 @@ export interface Trade {
 }
 
 export interface AnalyticsSummary {
+  currency?: 'CNY' | 'USD'
   totalBuyCashOut: string
   totalSellCashIn: string
   realizedPnl: string

@@ -15,6 +15,11 @@ block or rewrite ledger facts.
 - `QuoteCollector.collect(session, securities, refresh=True, now=None)`
 - `QuoteService.read_cached(session, securities, now=None)`
 - `GET /api/v1/quotes?symbols=SH:600519,SZ:002594&refresh=false`
+- Development startup uses `uv run` with a project-local cache and invokes
+  `python -m uvicorn` so the server and dependencies use the same interpreter.
+- US securities use an `America/New_York` calendar. Runtime tzdata should be
+  installed for daylight-saving correctness; a fixed-offset fallback only keeps
+  offline startup from crashing.
 
 ### 3. Contracts
 
@@ -47,6 +52,8 @@ set `ProfitTarget.status` to `TRIGGERED`. No quote operation creates trades.
 - Base: an offline provider leaves ledger buy, sell, void, and query routes usable.
 - Bad: replacing a failed quote with zero, or using a stale price to trigger an
   alert.
+- Windows/offline: if IANA tzdata is unavailable, Asia/Shanghai may safely fall
+  back to fixed UTC+8 because this market timezone has no DST transition.
 
 ### 6. Tests Required
 

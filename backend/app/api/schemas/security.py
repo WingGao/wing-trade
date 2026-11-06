@@ -19,6 +19,7 @@ class SecurityRead(APIModel):
     name: str | None = None
     security_type: str
     status: str
+    currency: str | None = None
 
 
 class WatchlistItemCreate(APIModel):

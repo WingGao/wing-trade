@@ -1,6 +1,6 @@
 """Market quote providers, cache services, and collection orchestration."""
 
-from .calendar import AShareTradingCalendar
+from .calendar import AShareTradingCalendar, USTradingCalendar
 from .collector import CircuitBreakerState, QuoteCollector
 from .provider import (
     AKShareQuoteProvider,
@@ -14,6 +14,7 @@ from .service import QuoteService
 
 __all__ = [
     "AShareTradingCalendar",
+    "USTradingCalendar",
     "AKShareQuoteProvider",
     "CircuitBreakerState",
     "FallbackQuoteProvider",

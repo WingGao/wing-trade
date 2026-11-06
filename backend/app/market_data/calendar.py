@@ -1,13 +1,26 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+try:
+    _SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    # Asia/Shanghai has no DST transitions. Keep Windows/offline environments
+    # usable when the optional system tzdata package is unavailable.
+    _SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+try:
+    _NEW_YORK_TIMEZONE = ZoneInfo("America/New_York")
+except ZoneInfoNotFoundError:
+    _NEW_YORK_TIMEZONE = timezone(timedelta(hours=-5), "America/New_York")
 
 
 class AShareTradingCalendar:
     """沪深 regular-session calendar with injectable holidays for tests."""
 
-    timezone = ZoneInfo("Asia/Shanghai")
+    timezone = _SHANGHAI_TIMEZONE
     morning_open = time(9, 15)
     morning_close = time(11, 30)
     afternoon_open = time(13, 0)
@@ -39,4 +52,14 @@ class AShareTradingCalendar:
         if current.tzinfo is None:
             current = current.replace(tzinfo=self.timezone)
         return current - fetched_at.astimezone(current.tzinfo) > self.cache_ttl(current)
+
+
+class USTradingCalendar(AShareTradingCalendar):
+    """US regular session calendar for long-only stocks and ETFs."""
+
+    timezone = _NEW_YORK_TIMEZONE
+    morning_open = time(9, 30)
+    morning_close = time(16, 0)
+    afternoon_open = time(9, 30)
+    afternoon_close = time(16, 0)
 

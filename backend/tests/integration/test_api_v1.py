@@ -79,3 +79,42 @@ def test_api_buy_sell_idempotency_and_error_contract(api_client) -> None:
     assert too_much.status_code in {409, 422}
     assert too_much.json()["error"]["code"] in {"INSUFFICIENT_LOT_QTY", "VALIDATION_ERROR"}
 
+
+def test_us_account_isolated_currency_and_security_flow(api_client) -> None:
+    account = api_client.post(
+        "/api/v1/accounts", json={"name": "US Trading", "currency": "USD"}
+    )
+    assert account.status_code == 201
+    account_id = account.json()["id"]
+    security = api_client.post(
+        "/api/v1/securities", json={"market": "US", "symbol": "AAPL", "name": "Apple"}
+    )
+    assert security.status_code == 201
+    assert security.json()["currency"] == "USD"
+
+    buy = api_client.post(
+        "/api/v1/trades/buy",
+        json={
+            "accountId": account_id,
+            "securityId": security.json()["id"],
+            "executedAt": datetime(2026, 11, 5, tzinfo=timezone.utc).isoformat(),
+            "qty": "2",
+            "price": "200",
+            "clientRequestId": "us-buy-1",
+        },
+    )
+    assert buy.status_code == 201
+    assert api_client.get(f"/api/v1/analytics/summary?accountId={account_id}").json()["currency"] == "USD"
+
+    mismatch = api_client.post(
+        "/api/v1/trades/buy",
+        json={
+            "securityId": security.json()["id"],
+            "executedAt": datetime(2026, 11, 5, tzinfo=timezone.utc).isoformat(),
+            "qty": "1",
+            "price": "200",
+        },
+    )
+    assert mismatch.status_code == 422
+    assert mismatch.json()["error"]["code"] == "ACCOUNT_CURRENCY_MISMATCH"
+

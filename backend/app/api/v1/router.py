@@ -9,7 +9,8 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, request_actor, resolve_account, resolve_strategy
+from app.api.deps import get_db, request_actor, resolve_account, resolve_strategy, validate_account_security
+from app.api.schemas.account import AccountCreate
 from app.api.schemas.security import SecurityCreate, WatchlistItemCreate
 from app.api.schemas.target import ProfitTargetCreate, ProfitTargetPatch
 from app.api.schemas.trade import BuyTradeRequest, SellPreviewRequest, SellTradeRequest, VoidTradeRequest
@@ -20,11 +21,13 @@ from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_qty
 from app.market_data import MockQuoteProvider, QuoteCollector
 from app.models.ledger import (
+    Account,
     Cycle,
     Lot,
     ProfitTarget,
     QuoteCache,
     Security,
+    Strategy,
     Trade,
     TradeMatch,
     WatchlistItem,
@@ -34,11 +37,28 @@ from app.services.cycle import CycleService
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
 from app.services.target import TargetService
+from app.domain.markets import currency_for_market
 
 
 quote_collector = QuoteCollector(MockQuoteProvider())
 
 router = APIRouter(prefix="/api/v1")
+
+
+def account_data(account: Account) -> dict[str, Any]:
+    return {"id": account.id, "name": account.name, "currency": account.currency, "broker": account.broker}
+
+
+def security_data(security: Security) -> dict[str, Any]:
+    return {
+        "id": security.id,
+        "market": security.market,
+        "symbol": security.symbol,
+        "name": security.name,
+        "securityType": security.security_type,
+        "status": security.status,
+        "currency": currency_for_market(security.market),
+    }
 
 
 def _fmt(value: Decimal | None, scale: int = 4) -> str | None:
@@ -53,6 +73,7 @@ def trade_data(trade: Trade) -> dict[str, Any]:
     return {
         "id": trade.id,
         "accountId": trade.account_id,
+        "currency": trade.account.currency if trade.account is not None else None,
         "securityId": trade.security_id,
         "strategyId": trade.strategy_id,
         "cycleId": trade.cycle_id,
@@ -134,6 +155,27 @@ def _security_or_404(session: Session, security_id: str) -> Security:
     return security
 
 
+@router.get("/accounts")
+def list_accounts(session: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    return [account_data(account) for account in session.scalars(select(Account).order_by(Account.created_at))]
+
+
+@router.post("/accounts", status_code=status.HTTP_201_CREATED)
+def create_account(payload: AccountCreate, session: Session = Depends(get_db)) -> dict[str, Any]:
+    begin_write(session)
+    try:
+        account = Account(name=payload.name, currency=payload.currency, broker=payload.broker)
+        session.add(account)
+        session.flush()
+        session.add(Strategy(account_id=account.id, name="DEFAULT"))
+        session.flush()
+        finish_write(session, True)
+        return account_data(account)
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
 @router.get("/securities")
 def list_securities(query: str | None = Query(default=None), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
     stmt = select(Security).order_by(Security.market, Security.symbol)
@@ -141,7 +183,7 @@ def list_securities(query: str | None = Query(default=None), session: Session = 
         term = f"%{query}%"
         stmt = stmt.where((Security.symbol.ilike(term)) | (Security.name.ilike(term)))
     return [
-        {"id": s.id, "market": s.market, "symbol": s.symbol, "name": s.name, "securityType": s.security_type, "status": s.status}
+        security_data(s)
         for s in session.scalars(stmt)
     ]
 
@@ -151,15 +193,19 @@ def create_security(payload: SecurityCreate, session: Session = Depends(get_db))
     begin_write(session)
     try:
         market = payload.market.upper()
+        try:
+            currency_for_market(market)
+        except ValueError as exc:
+            raise ValidationError(str(exc), details={"market": market}) from exc
         existing = session.scalar(select(Security).where(Security.market == market, Security.symbol == payload.symbol))
         if existing is not None:
             finish_write(session, True)
-            return {"id": existing.id, "market": existing.market, "symbol": existing.symbol, "name": existing.name, "securityType": existing.security_type, "status": existing.status}
+            return security_data(existing)
         security = Security(market=market, symbol=payload.symbol, name=payload.name, security_type=payload.security_type)
         session.add(security)
         session.flush()
         finish_write(session, True)
-        return {"id": security.id, "market": security.market, "symbol": security.symbol, "name": security.name, "securityType": security.security_type, "status": security.status}
+        return security_data(security)
     except Exception:
         finish_write(session, False)
         raise
@@ -169,7 +215,7 @@ def create_security(payload: SecurityCreate, session: Session = Depends(get_db))
 def list_watchlist(account_id: str | None = Query(default=None, alias="accountId"), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
     account_id = resolve_account(session, account_id)
     rows = session.execute(select(WatchlistItem, Security).join(Security, Security.id == WatchlistItem.security_id).where(WatchlistItem.account_id == account_id).order_by(WatchlistItem.sort_order, WatchlistItem.created_at)).all()
-    return [{"id": item.id, "accountId": item.account_id, "securityId": item.security_id, "sortOrder": item.sort_order, "security": {"id": security.id, "market": security.market, "symbol": security.symbol, "name": security.name, "securityType": security.security_type, "status": security.status}} for item, security in rows]
+    return [{"id": item.id, "accountId": item.account_id, "securityId": item.security_id, "sortOrder": item.sort_order, "security": security_data(security)} for item, security in rows]
 
 
 @router.post("/watchlist", status_code=status.HTTP_201_CREATED)
@@ -207,7 +253,8 @@ def remove_watchlist(security_id: str, account_id: str | None = Query(default=No
 def _resolve_trade_scope(session: Session, account_id: str | None, strategy_id: str | None, security_id: str) -> tuple[str, str]:
     account = resolve_account(session, account_id)
     strategy = resolve_strategy(session, account, strategy_id)
-    _security_or_404(session, security_id)
+    security = _security_or_404(session, security_id)
+    validate_account_security(session, account, security.market)
     return account, strategy
 
 
@@ -302,6 +349,7 @@ def list_positions(account_id: str | None = Query(default=None, alias="accountId
         grouped.setdefault((lot.security_id, lot.strategy_id), []).append(lot)
     result = []
     for (security_id, strategy_id), group in grouped.items():
+        security = session.get(Security, security_id)
         matches = list(
             session.scalars(
                 select(TradeMatch)
@@ -325,7 +373,7 @@ def list_positions(account_id: str | None = Query(default=None, alias="accountId
         quote = session.get(QuoteCache, security_id)
         if quote is not None:
             metrics = AccountingService.position_metrics(group, latest_price=quote.last_price, realized_pnl=realized, total_buy_cash_out=buy_cash, total_sell_cash_in=sell_cash)
-        result.append({"securityId": security_id, "strategyId": strategy_id, "remainingQty": _fmt(metrics.remaining_qty), "remainingCost": _fmt(metrics.remaining_cost), "averageCost": _fmt(metrics.average_cost, 6), "realizedPnl": _fmt(metrics.realized_pnl), "unrealizedPnl": _fmt(metrics.unrealized_pnl), "strategyBreakevenPrice": _fmt(metrics.strategy_breakeven_price, 6), "fundsRecoveredSurplus": _fmt(metrics.funds_recovered_surplus)})
+        result.append({"securityId": security_id, "market": security.market if security else None, "currency": currency_for_market(security.market) if security else None, "strategyId": strategy_id, "remainingQty": _fmt(metrics.remaining_qty), "remainingCost": _fmt(metrics.remaining_cost), "averageCost": _fmt(metrics.average_cost, 6), "realizedPnl": _fmt(metrics.realized_pnl), "unrealizedPnl": _fmt(metrics.unrealized_pnl), "strategyBreakevenPrice": _fmt(metrics.strategy_breakeven_price, 6), "fundsRecoveredSurplus": _fmt(metrics.funds_recovered_surplus)})
     return result
 
 
@@ -448,7 +496,7 @@ def analytics_summary(account_id: str | None = Query(default=None, alias="accoun
         if quote is not None:
             have_quote = True
             unrealized += quote.last_price * lot.remaining_qty - lot.remaining_cost
-    return {"totalBuyCashOut": _fmt(buy_cash), "totalSellCashIn": _fmt(sell_cash), "realizedPnl": _fmt(realized), "unrealizedPnl": _fmt(round_amount(unrealized)) if have_quote else None, "remainingQty": _fmt(remaining_qty), "remainingCost": _fmt(remaining_cost)}
+    return {"currency": session.get(Account, account).currency, "totalBuyCashOut": _fmt(buy_cash), "totalSellCashIn": _fmt(sell_cash), "realizedPnl": _fmt(realized), "unrealizedPnl": _fmt(round_amount(unrealized)) if have_quote else None, "remainingQty": _fmt(remaining_qty), "remainingCost": _fmt(remaining_cost)}
 
 
 @router.get("/quotes")
@@ -478,6 +526,8 @@ async def list_quotes(
             {
                 "symbol": canonical,
                 "securityId": security.id if security is not None else None,
+                "market": security.market if security is not None else None,
+                "currency": currency_for_market(security.market) if security is not None else None,
                 "lastPrice": _fmt(snapshot.last_price, 6) if snapshot else None,
                 "prevClose": _fmt(snapshot.prev_close, 6) if snapshot else None,
                 "changePct": _fmt(snapshot.change_pct, 6) if snapshot else None,

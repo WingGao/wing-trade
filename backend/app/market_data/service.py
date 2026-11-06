@@ -10,7 +10,7 @@ from app.domain.enums import TargetStatus
 from app.domain.precision import round_price
 from app.models.ledger import Lot, QuoteCache, Security
 
-from .calendar import AShareTradingCalendar
+from .calendar import AShareTradingCalendar, USTradingCalendar
 from .provider import QuoteSnapshot, canonical_symbol
 
 
@@ -19,6 +19,10 @@ class QuoteService:
 
     def __init__(self, calendar: AShareTradingCalendar | None = None) -> None:
         self.calendar = calendar or AShareTradingCalendar()
+        self.us_calendar = USTradingCalendar()
+
+    def calendar_for_security(self, security: Security) -> AShareTradingCalendar:
+        return self.us_calendar if security.market.upper() == "US" else self.calendar
 
     @staticmethod
     def security_symbol(security: Security) -> str:
@@ -46,7 +50,7 @@ class QuoteService:
             row = session.get(QuoteCache, security.id)
             if row is None:
                 continue
-            stale = row.is_stale or self.calendar.is_stale(row.fetched_at, now=current)
+            stale = row.is_stale or self.calendar_for_security(security).is_stale(row.fetched_at, now=current)
             result.append(
                 QuoteSnapshot(
                     symbol=self.security_symbol(security),

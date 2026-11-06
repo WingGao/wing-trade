@@ -62,3 +62,7 @@ class EntityNotFoundError(DomainError):
 
 class UnsupportedOperationError(DomainError):
     code = "UNSUPPORTED_OPERATION"
+
+
+class AccountCurrencyMismatchError(DomainError):
+    code = "ACCOUNT_CURRENCY_MISMATCH"
