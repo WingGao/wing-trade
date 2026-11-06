@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/market-data-guidelines.md","reason":"Verify US calendar selection, stale fallback, and provider isolation"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify currency isolation and Decimal/timezone persistence"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify USD labels, typed DTOs, and unchanged A-share UI behavior"}

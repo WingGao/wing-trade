@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Backend layer boundaries for accounts, API routes, services, and market data"}
+{"file":".trellis/spec/backend/market-data-guidelines.md","reason":"Quote provider, calendar, cache staleness, and offline fallback contracts"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Decimal persistence, migration, timezone, and account currency constraints"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Typed API DTOs, currency display, quick trade entry, and E2E expectations"}
