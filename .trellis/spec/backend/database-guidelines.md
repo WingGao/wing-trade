@@ -84,6 +84,15 @@ lots = [lot for lot in lots if lot.remaining_qty > 0]
 
 SQLite stores `ExactDecimal` as text, so numeric filtering belongs in Python.
 
+### Common Mistakes
+
+- SQLite `DateTime(timezone=True)` values may be returned without timezone
+  information. Normalize persisted and request timestamps to UTC before
+  chronology comparisons.
+- A slotted dataclass exposes field descriptors on the class. Read configuration
+  defaults from an instance (for example `defaults = Settings()`) rather than
+  from `Settings.database_url`.
+
 ## Naming and Migration Rules
 
 - Use singular model names and plural table names (`Trade` / `trades`).

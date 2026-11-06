@@ -73,7 +73,7 @@ class QuoteCollector:
             try:
                 snapshots = await asyncio.to_thread(self.provider.get_quotes, symbols)
                 self._reset_breaker()
-                result = self.service.upsert(session, snapshots, now=current)
+                result = self.service.upsert(session, snapshots.values(), now=current)
                 session.commit()
                 return result
             except Exception:

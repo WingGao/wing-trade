@@ -23,6 +23,12 @@ def _value(obj: object, name: str, default: object | None = None) -> object | No
     return getattr(obj, name, default)
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class MatchingService:
     """FIFO preview and deterministic buy/sell allocation."""
 
@@ -100,7 +106,12 @@ class MatchingService:
                 raise LotOwnershipError("lot belongs to another security")
             if strategy_id is not None and _value(lot, "strategy_id") != strategy_id:
                 raise LotOwnershipError("lot belongs to another strategy")
-            if sell_executed_at is not None and _value(lot, "executed_at") > sell_executed_at:
+            lot_executed_at = _value(lot, "executed_at")
+            if (
+                sell_executed_at is not None
+                and isinstance(lot_executed_at, datetime)
+                and _as_utc(lot_executed_at) > _as_utc(sell_executed_at)
+            ):
                 raise FutureLotError("a lot cannot be sold before it was bought")
             available = round_qty(_value(lot, "remaining_qty", 0))
             if request.matched_qty > available:

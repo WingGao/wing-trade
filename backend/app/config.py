@@ -13,8 +13,9 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        defaults = cls()
         return cls(
-            database_url=os.getenv("DATABASE_URL", cls.database_url),
+            database_url=os.getenv("DATABASE_URL", defaults.database_url),
             echo_sql=os.getenv("ECHO_SQL", "0").lower() in {"1", "true", "yes"},
         )
 
