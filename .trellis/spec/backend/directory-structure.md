@@ -1,54 +1,39 @@
-# Directory Structure
+# Backend Directory Structure
 
-> How backend code is organized in this project.
+## Scope
 
----
+The backend is a single Python package under backend/app. Keep transport,
+application services, domain rules, persistence, and market data in their
+existing layers.
 
-## Overview
+## Layout
 
-<!--
-Document your project's backend directory structure here.
+    app/main.py                 FastAPI app, middleware, health endpoints
+    app/api/                    Dependencies, schemas, errors, v1 routes
+    app/domain/                 Decimal rules, value objects, enums, exceptions
+    app/services/               Ledger, matching, accounting, cycle, target
+    app/models/ledger.py        SQLAlchemy tables and relationships
+    app/db/                     Engine, sessions, metadata, migrations support
+    app/market_data/             Quote providers, calendar, cache, collector
+    tests/unit/                  Pure accounting and invariant tests
+    tests/integration/           Database and HTTP boundary tests
+    alembic/                     Versioned schema migrations
 
-Questions to answer:
-- How are modules/packages organized?
-- Where does business logic live?
-- Where are API endpoints defined?
-- How are utilities and helpers organized?
--->
+## Module Rules
 
-(To be filled by the team)
+Put HTTP request/response shapes in app/api/schemas and route composition in
+app/api/v1/router.py. Keep business calculations in domain or services so they
+can run without FastAPI. Put external quote SDK calls behind app/market_data
+providers. Add schema changes as a new Alembic revision.
 
----
+## Naming
 
-## Directory Layout
-
-```
-<!-- Replace with your actual structure -->
-src/
-├── ...
-└── ...
-```
-
----
-
-## Module Organization
-
-<!-- How should new features/modules be organized? -->
-
-(To be filled by the team)
-
----
-
-## Naming Conventions
-
-<!-- File and folder naming rules -->
-
-(To be filled by the team)
-
----
+Use lowercase snake_case filenames and singular model classes with plural table
+names. Keep route response keys in the public camelCase form while Python
+attributes remain snake_case.
 
 ## Examples
 
-<!-- Link to well-organized modules as examples -->
-
-(To be filled by the team)
+TradeLedgerService is in app/services/ledger.py, ORM entities are in
+app/models/ledger.py, and the quote boundary is split across
+app/market_data/provider.py, service.py, and collector.py.

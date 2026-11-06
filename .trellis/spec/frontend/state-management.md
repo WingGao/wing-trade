@@ -1,51 +1,25 @@
-# State Management
-
-> How state is managed in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's state management conventions here.
-
-Questions to answer:
-- What state management solution do you use?
-- How is local vs global state decided?
-- How do you handle server state?
-- What are the patterns for derived state?
--->
-
-(To be filled by the team)
-
----
+# Frontend State Management
 
 ## State Categories
 
-<!-- Local state, global state, server state, URL state -->
+Pinia stores own reusable server and preference state. Local refs belong in a
+page or dialog when no other component needs them. Route params are URL state.
+The current stores are ledger, quotes, and preferences.
 
-(To be filled by the team)
+## Store Rules
 
----
-
-## When to Use Global State
-
-<!-- Criteria for promoting state to global -->
-
-(To be filled by the team)
-
----
+The ledger store loads positions, analytics summary, and trades. The quotes store
+owns quote loading, refresh state, and lookup by security ID. The preferences
+store owns includeClosed and display color preferences. Keep exact monetary
+strings from the API in state; do not normalize them through Number for requests.
 
 ## Server State
 
-<!-- How server data is cached and synchronized -->
+Use the typed API client for reads and mutations. Pages call store load methods
+in onMounted and reload after a successful mutation. Quote load errors are
+swallowed or shown as stale state so ledger actions remain available.
 
-(To be filled by the team)
+## Derived State
 
----
-
-## Common Mistakes
-
-<!-- State management mistakes your team has made -->
-
-(To be filled by the team)
+Use computed values for filtered rows and display-only labels. A derived value
+must point back to server state and must not reimplement accounting or matching.

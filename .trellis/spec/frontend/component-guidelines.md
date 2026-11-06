@@ -1,59 +1,30 @@
-# Component Guidelines
-
-> How components are built in this project.
-
----
-
-## Overview
-
-<!--
-Document your project's component conventions here.
-
-Questions to answer:
-- What component patterns do you use?
-- How are props defined?
-- How do you handle composition?
-- What accessibility standards apply?
--->
-
-(To be filled by the team)
-
----
+# Frontend Component Guidelines
 
 ## Component Structure
 
-<!-- Standard structure of a component file -->
+Use Vue single-file components with script setup, a typed script block, template,
+and scoped or shared CSS. Keep page data loading in pages and pass data to
+presentational components.
 
-(To be filled by the team)
+## Props and Events
 
----
+Define props with TypeScript interfaces or defineProps generics. Use v-model for
+dialog visibility and named events such as saved for mutations. Components should
+not reach into another component's internal state.
 
-## Props Conventions
+## Styling
 
-<!-- How props should be defined and typed -->
-
-(To be filled by the team)
-
----
-
-## Styling Patterns
-
-<!-- How styles are applied (CSS modules, styled-components, Tailwind, etc.) -->
-
-(To be filled by the team)
-
----
+The project uses Element Plus primitives with shared classes in src/styles.css.
+Prefer existing panel, toolbar, metric, and muted classes before adding one-off
+styles. Preserve the red-up/green-down preference semantics.
 
 ## Accessibility
 
-<!-- A11y requirements and patterns -->
+Use visible labels on form controls, meaningful button text, table headers, and
+status tags. Destructive actions such as trade voiding require a confirmation
+dialog. Stale quote state must have text, not color alone.
 
-(To be filled by the team)
+## Examples
 
----
-
-## Common Mistakes
-
-<!-- Component-related mistakes your team has made -->
-
-(To be filled by the team)
+QuoteBadge receives one Quote prop and renders price, change, source time, and
+stale state. BuyTradeDialog and ProfitTargetDialog expose v-model and saved.

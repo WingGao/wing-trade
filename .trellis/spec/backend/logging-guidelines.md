@@ -1,51 +1,35 @@
-# Logging Guidelines
+# Backend Logging Guidelines
 
-> How logging is done in this project.
+## Scope
 
----
+The FastAPI application uses Python logging. Request logging is installed in
+app/main.py and emits structured fields through the logging extra mapping.
 
-## Overview
+## Levels
 
-<!--
-Document your project's logging conventions here.
+Use INFO for completed requests and important state transitions, DEBUG for
+diagnostic details when explicitly enabled, WARNING for recoverable provider
+degradation, and ERROR with an exception for failed requests or unexpected
+failures.
 
-Questions to answer:
-- What logging library do you use?
-- What are the log levels and when to use each?
-- What should be logged?
-- What should NOT be logged (PII, secrets)?
--->
+## Required Fields
 
-(To be filled by the team)
-
----
-
-## Log Levels
-
-<!-- When to use each level: debug, info, warn, error -->
-
-(To be filled by the team)
-
----
-
-## Structured Logging
-
-<!-- Log format, required fields -->
-
-(To be filled by the team)
-
----
+Request logs include request_id, path, status_code, and duration_ms. Quote
+degradation logs should identify the provider and stale-cache result without
+logging request bodies or credentials.
 
 ## What to Log
 
-<!-- Important events to log -->
+Log request completion, uncaught request failures, provider failures, circuit
+state changes, and identifiers needed to correlate a ledger audit event.
 
-(To be filled by the team)
+## What Not to Log
 
----
+Do not log passwords, tokens, full request bodies, or arbitrary account data.
+Amounts and symbols may be logged only when needed to diagnose a deterministic
+ledger or quote calculation.
 
-## What NOT to Log
+## Example
 
-<!-- Sensitive data, PII, secrets -->
-
-(To be filled by the team)
+The middleware in app/main.py reads x-request-id, creates one when absent,
+returns it in the response header, and passes it in logger extra fields.

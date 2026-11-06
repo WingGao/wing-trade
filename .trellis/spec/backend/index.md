@@ -14,11 +14,11 @@ This directory contains guidelines for backend development. Fill in each file wi
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | Seeded |
+| [Directory Structure](./directory-structure.md) | Module organization and file layout | Implemented |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | Implemented for M0 ledger |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Implemented for M0 API |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Implemented for M0 ledger |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
+| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Implemented |
 | [Market Data Guidelines](./market-data-guidelines.md) | Quote provider, cache, staleness, circuit breaker | Implemented for M1 |
 
 ---
