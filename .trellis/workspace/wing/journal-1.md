@@ -117,3 +117,25 @@ Filled backend and frontend Trellis specifications with code-backed directory, l
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: Final A-share MVP integration validation
+<!-- trellis-session: v=2 fp=c9e6fe8ff843411f -->
+
+**Date**: 2026-11-06
+**Task**: Final A-share MVP integration validation
+**Branch**: `master`
+
+### Summary
+
+Completed parent integration review for the A-share portfolio MVP. Backend pytest passed 10 tests after fixing slotted Settings defaults, SQLite naive/aware chronology comparison, and quote provider snapshot iteration. Frontend type-check/build and Playwright passed earlier; docker compose config passed, while full image startup remained unavailable because image pulls did not finish. Archived the completed parent task.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7bbdcd5` | fix: stabilize full-stack integration validation |
+
+### Status
+
+[OK] **Completed**
