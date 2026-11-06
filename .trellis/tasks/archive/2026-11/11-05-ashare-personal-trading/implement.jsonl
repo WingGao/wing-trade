@@ -1,0 +1,4 @@
+{"file": "docs/feat/ashare_personal_trading_spec.md", "reason": "Product and technical specification baseline"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer and code-reuse thinking guides"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guidelines index"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guidelines index"}

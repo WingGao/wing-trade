@@ -1,0 +1,4 @@
+{"file": "docs/feat/ashare_personal_trading_spec.md", "reason": "Verification against product invariants and acceptance criteria"}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer and code-reuse verification"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend quality guidelines"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend quality guidelines"}

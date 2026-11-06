@@ -1,0 +1,31 @@
+{
+  "id": "ashare-personal-trading",
+  "name": "ashare-personal-trading",
+  "title": "A股个人交易管理与盯盘系统 (MVP)",
+  "description": "基于A股交易流水与批次配对的个人投资账本与自选股盯盘系统整体规划与验收",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "wing",
+  "assignee": "wing",
+  "createdAt": "2026-11-05",
+  "completedAt": "2026-11-06",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-05-m0-ledger-domain-db",
+    "11-05-m0-ledger-api",
+    "11-05-m1-market-quote",
+    "11-05-m1-frontend-mvp"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
