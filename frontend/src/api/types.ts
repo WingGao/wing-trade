@@ -1,7 +1,13 @@
+export type Currency = 'CNY' | 'USD'
+
+export type DashboardMode = 'cache' | 'auto' | 'manual'
+
+export type ValuationStatus = 'fresh' | 'stale' | 'partial' | 'unavailable' | 'empty'
+
 export interface Account {
   id: string
   name: string
-  currency: 'CNY' | 'USD'
+  currency: Currency
   broker?: string | null
 }
 
@@ -12,7 +18,7 @@ export interface Security {
   name?: string | null
   securityType?: string
   status?: string
-  currency?: 'CNY' | 'USD'
+  currency?: Currency
 }
 
 export interface Quote {
@@ -26,7 +32,7 @@ export interface Quote {
   provider?: string | null
   isStale: boolean
   market?: string | null
-  currency?: 'CNY' | 'USD' | null
+  currency?: Currency | null
 }
 
 export interface Position {
@@ -34,7 +40,7 @@ export interface Position {
   market?: string | null
   symbol?: string | null
   name?: string | null
-  currency?: 'CNY' | 'USD' | null
+  currency?: Currency | null
   strategyId: string
   remainingQty: string
   remainingCost: string
@@ -92,13 +98,49 @@ export interface Trade {
 }
 
 export interface AnalyticsSummary {
-  currency?: 'CNY' | 'USD'
+  currency?: Currency
   totalBuyCashOut: string
   totalSellCashIn: string
   realizedPnl: string
   unrealizedPnl?: string | null
   remainingQty: string
   remainingCost: string
+}
+
+export interface LowestPriceGroup {
+  purchasePrice: string
+  lotCount: number
+  remainingQty: string
+  remainingCost: string
+  unrealizedPnl: string | null
+  unrealizedReturnPct: string | null
+}
+
+export interface DashboardPosition extends Position {
+  quote: Quote | null
+  unrealizedReturnPct: string | null
+  lowestPriceGroup: LowestPriceGroup | null
+}
+
+export interface DashboardSummary extends AnalyticsSummary {
+  currency: Currency
+  unrealizedPnl: string | null
+  unrealizedReturnPct: string | null
+  valuationStatus: ValuationStatus
+  totalOpenPositions: number
+  quotedOpenPositions: number
+  staleOpenPositions: number
+}
+
+export interface DashboardRead {
+  accountId: string
+  currency: Currency
+  asOf: string
+  marketSessionOpen: boolean
+  pollAfterSeconds: number
+  positions: DashboardPosition[]
+  summary: DashboardSummary
+  quotes: Quote[]
 }
 
 export interface SellPreview {

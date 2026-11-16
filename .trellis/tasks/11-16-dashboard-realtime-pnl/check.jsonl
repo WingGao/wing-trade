@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/market-data-guidelines.md","reason":"检查部分缓存结果、过期状态、共享节流和目标提醒安全。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"检查 Decimal 成本／浮盈合计、不变量测试、静态检查与类型。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"保留现有账务错误响应结构和路由边界。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"验证离线可用性、时间标签、快速记账、构建和端到端行为。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"检查估值整份同步更新，确保前端不重新执行账务核算。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"检查精确字符串、响应别名、null／零语义和类型化首页 DTO。"}
+{"file":".trellis/tasks/11-16-dashboard-realtime-pnl/research/repository-findings.md","reason":"检查既有缺口和查询范围内最低价全部批次合并规则。"}
+{"file":".trellis/tasks/11-16-dashboard-realtime-pnl/research/ashare-provider.md","reason":"验证行情源映射、有界传输、真实行情限制及模拟源隔离。"}

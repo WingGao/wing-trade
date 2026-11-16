@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-
+_SHANGHAI_TIMEZONE: tzinfo
 try:
     _SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -11,6 +11,7 @@ except ZoneInfoNotFoundError:
     # usable when the optional system tzdata package is unavailable.
     _SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
 
+_NEW_YORK_TIMEZONE: tzinfo
 try:
     _NEW_YORK_TIMEZONE = ZoneInfo("America/New_York")
 except ZoneInfoNotFoundError:
@@ -46,11 +47,12 @@ class AShareTradingCalendar:
         return timedelta(seconds=self.trading_ttl_seconds if self.is_session_open(value) else self.closed_ttl_seconds)
 
     def is_stale(self, fetched_at: datetime, *, now: datetime | None = None) -> bool:
+        """按交易时段缓存期限判断获取时间是否过期。"""
         current = now or datetime.now(self.timezone)
         if fetched_at.tzinfo is None:
-            fetched_at = fetched_at.replace(tzinfo=self.timezone)
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
         if current.tzinfo is None:
-            current = current.replace(tzinfo=self.timezone)
+            current = current.replace(tzinfo=timezone.utc)
         return current - fetched_at.astimezone(current.tzinfo) > self.cache_ttl(current)
 
 

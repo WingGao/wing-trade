@@ -1,4 +1,4 @@
-import type { Account, AnalyticsSummary, ApiError, Lot, Position, ProfitTarget, Quote, Security, SellPreview, Trade } from './types'
+import type { Account, AnalyticsSummary, ApiError, DashboardMode, DashboardRead, Lot, Position, ProfitTarget, Quote, Security, SellPreview, Trade } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
@@ -26,6 +26,8 @@ export const api = {
   createAccount: (payload: Record<string, unknown>) => request<Account>('/accounts', { method: 'POST', body: JSON.stringify(payload) }),
   positions: (includeClosed = false) => request<Position[]>(`/positions?${query({ includeClosed })}`),
   summary: () => request<AnalyticsSummary>(`/analytics/summary`),
+  /** 读取同时包含账务、行情和估值的一致性首页快照。 */
+  dashboard: (accountId?: string, includeClosed = false, mode: DashboardMode = 'auto') => request<DashboardRead>(`/dashboard?${query({ accountId, includeClosed, mode })}`),
   quotes: (symbols?: string[], refresh = false) => request<{ quotes: Quote[] }>(`/quotes?${query({ symbols: symbols?.join(','), refresh })}`),
   securities: (search = '') => request<Security[]>(`/securities?${query({ query: search })}`),
   createSecurity: (payload: Record<string, unknown>) => request<Security>('/securities', { method: 'POST', body: JSON.stringify(payload) }),

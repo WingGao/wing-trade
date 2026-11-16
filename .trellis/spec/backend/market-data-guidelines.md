@@ -81,3 +81,78 @@ row.is_stale = True
 
 A provider failure must preserve the previous valid value and make its age
 visible to the caller.
+
+---
+
+## Scenario: A 股真实行情与 Dashboard 一致估值
+
+### 1. Scope / Trigger
+
+- 触发条件：新增 `/api/v1/dashboard`、运行时可切换真实 A 股行情源，或修改行情时间、过期覆盖、批次浮盈与账户汇总契约。
+- 该契约跨 provider、缓存、账务服务、HTTP DTO 和首页轮询；行情仍是派生数据，不能阻塞或改写账务事实。
+
+### 2. Signatures
+
+- `create_quote_provider(configuration=None) -> QuoteProvider`
+- `EastmoneyQuoteProvider.get_quotes(symbols: Sequence[str]) -> dict[str, QuoteSnapshot]`
+- `GET /api/v1/dashboard?accountId=<id>&includeClosed=false&mode=cache|auto|manual`
+- 响应采用 camelCase：`accountId`、`asOf`、`marketSessionOpen`、`pollAfterSeconds`、`positions`、`summary`、`quotes`。
+- `DashboardPosition` 包含 `quote`、`unrealizedReturnPct`、`lowestPriceGroup`；`DashboardSummary` 包含 `valuationStatus`、`totalOpenPositions`、`quotedOpenPositions`、`staleOpenPositions`。
+
+### 3. Contracts
+
+- `QUOTE_PROVIDER` 只接受 `eastmoney|mock`，默认 `eastmoney`；`QUOTE_TIMEOUT_SECONDS` 必须是有限正数，默认 5 秒。导入模块、健康检查和纯账务请求不得访问行情网络。
+- 东方财富源只请求 SH/SZ/BJ 证券，上游市场编号为 SH=`1`、SZ/BJ=`0`；每批最多 100 只，响应和累计请求量必须有上限。
+- `lastPrice`、`prevClose`、`changePct` 使用 Decimal 解析；`sourceTime` 来自上游，`fetchedAt` 来自本地成功接收时刻，不能用 `fetchedAt` 覆盖 `sourceTime`。
+- `cache` 只读账务和共享缓存；`auto` 在交易时段请求刷新，休市时每 60 秒检查展示状态、最多每小时请求上游一次；缺少行情时可立即获取；`manual` 忽略休市展示间隔但仍受共享节流和熔断约束。
+- `valuationStatus` 取值：`fresh`（全部持仓有效）、`stale`（全部持仓有价格但至少一项过期）、`partial`（部分持仓缺价格）、`unavailable`（全部缺价格）、`empty`（无未结清持仓）。
+- `partial|unavailable` 时账户 `unrealizedPnl` 和 `unrealizedReturnPct` 必须为 `null`；`empty` 时金额为零、百分比为 `null`；收益率分母不大于零时必须为 `null`。
+- 最低价组只比较 ACTIVE BUY 交易、OPEN 批次和剩余数量大于零的记录，范围限定同一账户、证券、策略；以原始成交价 `Trade.price` 为准，合并最低价下的全部批次后计算数量和成本加权估值。
+- A 股刷新不得把不支持的美股缓存标记为过期或发送给 A 股上游。失败的行情请求不得影响买卖、作废和账务查询。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+|---|---|
+| 行情源超时、格式异常或熔断开启 | 保留最后有效价格，标记 `stale`；无缓存时为 `null` |
+| 多批请求仅部分批次成功 | 保留成功报价，缺失证券保留旧缓存并标记过期 |
+| 所有批次均失败或全部返回空 | 不重置熔断失败状态，进入过期缓存回退 |
+| 上游单行价格、昨收或身份无效 | 跳过该行，不生成伪造报价 |
+| 旧缓存价格为零或负数 | 视为无行情，不得序列化为可估值的零价格 |
+| 未结清持仓缺少任一报价 | `partial` 或 `unavailable`，账户总浮盈为 `null` |
+| 剩余成本小于或等于零 | 收益率返回 `null`，不得返回 NaN 或 Infinity |
+| 旧行情达到止盈价 | 不得触发提醒；仅有效且未过期快照可触发 |
+
+### 5. Good/Base/Bad Cases
+
+- Good：三个同价批次买入价均为 8，其中两个 OPEN 剩余、一个已结清；组只合并两个剩余批次，并按合计剩余成本计算组收益率。
+- Base：东财不可达但 SQLite 账务正常；首页返回账务事实、最后报价和明确的过期状态。
+- Bad：用当日最低价、含费单位成本或时间最早的一条同价批次代替“最低原始买入成交价下全部剩余批次”。
+- Bad：缺一项行情时仍返回其余持仓小计作为完整账户未实现收益。
+
+### 6. Tests Required
+
+- provider 单元测试断言市场映射、Decimal 精度、零涨幅、报价时间、无效行、批量上限、响应上限、多批部分成功和全部失败。
+- collector 集成测试断言部分缺失完整回退、空结果不重置熔断、A 股刷新不污染美股缓存、旧行情不触发提醒。
+- dashboard 服务测试断言最低价同价全批次合并、部分卖出、结清/作废、账户/证券/策略隔离、零/负成本和五种覆盖状态。
+- HTTP 测试断言真实序列化的 camelCase 字段、Decimal 字符串、`null` 与零语义及 `cache|auto|manual` 参数。
+- 自动化测试必须注入 provider/transport/clock，不得依赖公网。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+lowest_lot = min(open_lots, key=lambda lot: lot.buy_trade.price)
+return latest_price * lowest_lot.remaining_qty - lowest_lot.remaining_cost
+```
+
+#### Correct
+
+```python
+lowest_price = min(lot.buy_trade.price for lot in eligible_lots)
+selected = [lot for lot in eligible_lots if lot.buy_trade.price == lowest_price]
+remaining_qty = sum(lot.remaining_qty for lot in selected)
+remaining_cost = sum(lot.remaining_cost for lot in selected)
+return latest_price * remaining_qty - remaining_cost
+```

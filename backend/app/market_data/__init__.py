@@ -2,8 +2,10 @@
 
 from .calendar import AShareTradingCalendar, USTradingCalendar
 from .collector import CircuitBreakerState, QuoteCollector
+from .factory import create_quote_provider
 from .provider import (
     AKShareQuoteProvider,
+    EastmoneyQuoteProvider,
     FallbackQuoteProvider,
     MockQuoteProvider,
     ProviderHealth,
@@ -17,6 +19,7 @@ __all__ = [
     "USTradingCalendar",
     "AKShareQuoteProvider",
     "CircuitBreakerState",
+    "EastmoneyQuoteProvider",
     "FallbackQuoteProvider",
     "MockQuoteProvider",
     "ProviderHealth",
@@ -24,4 +27,5 @@ __all__ = [
     "QuoteProvider",
     "QuoteService",
     "QuoteSnapshot",
+    "create_quote_provider",
 ]

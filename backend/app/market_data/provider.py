@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Mapping, Protocol, Sequence
+from typing import Any, Protocol, cast
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from app.domain.precision import ensure_decimal, round_price
 
 
 def _now() -> datetime:
+    """返回带 UTC 时区的当前时间。"""
     return datetime.now(timezone.utc)
 
 
@@ -34,17 +39,25 @@ class QuoteSnapshot:
     is_stale: bool = False
 
     def __post_init__(self) -> None:
+        """规范证券代码并校验、量化报价数值。"""
         object.__setattr__(self, "symbol", canonical_symbol(self.symbol))
-        object.__setattr__(self, "last_price", round_price(ensure_decimal(self.last_price, field="last_price")))
+        last_price = round_price(ensure_decimal(self.last_price, field="last_price"))
+        if last_price <= 0:
+            raise ValueError("last_price must be positive")
+        object.__setattr__(self, "last_price", last_price)
         if self.prev_close is not None:
-            object.__setattr__(self, "prev_close", round_price(ensure_decimal(self.prev_close, field="prev_close")))
+            prev_close = round_price(ensure_decimal(self.prev_close, field="prev_close"))
+            if prev_close <= 0:
+                raise ValueError("prev_close must be positive")
+            object.__setattr__(self, "prev_close", prev_close)
         if self.change_pct is None and self.prev_close not in (None, Decimal("0")):
             change = (self.last_price - self.prev_close) / self.prev_close * Decimal("100")
             object.__setattr__(self, "change_pct", round_price(change))
         elif self.change_pct is not None:
             object.__setattr__(self, "change_pct", round_price(ensure_decimal(self.change_pct, field="change_pct")))
 
-    def stale(self, *, at: datetime | None = None) -> "QuoteSnapshot":
+    def stale(self, *, at: datetime | None = None) -> QuoteSnapshot:
+        """返回保留原价格与时间戳的过期快照。"""
         return QuoteSnapshot(
             symbol=self.symbol,
             last_price=self.last_price,
@@ -85,14 +98,20 @@ class MockQuoteProvider:
         self.set_quotes(quotes or {})
 
     def set_quotes(self, quotes: Mapping[str, QuoteSnapshot | Mapping[str, object]]) -> None:
+        """覆盖或补充可确定复现的模拟行情。"""
         for symbol, value in quotes.items():
             if isinstance(value, QuoteSnapshot):
                 snapshot = value
             else:
-                snapshot = QuoteSnapshot(symbol=symbol, provider=self.name, **value)
+                snapshot = QuoteSnapshot(
+                    symbol=symbol,
+                    provider=self.name,
+                    **cast(dict[str, Any], value),
+                )
             self.quotes[canonical_symbol(symbol)] = snapshot
 
     def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """按请求顺序返回已配置的模拟行情。"""
         return {
             canonical_symbol(symbol): self.quotes[canonical_symbol(symbol)]
             for symbol in symbols
@@ -100,9 +119,11 @@ class MockQuoteProvider:
         }
 
     def health(self) -> ProviderHealth:
+        """报告模拟行情源可用。"""
         return ProviderHealth(provider=self.name, healthy=True)
 
     async def get_quotes_async(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """在线程中执行同步模拟行情读取。"""
         return await asyncio.to_thread(self.get_quotes, symbols)
 
 
@@ -116,12 +137,14 @@ class FallbackQuoteProvider:
         self.fallback = fallback
 
     def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """优先返回主行情源，失败时返回过期回退快照。"""
         try:
             return self.primary.get_quotes(symbols)
         except Exception:
             return {symbol: snapshot.stale() for symbol, snapshot in self.fallback.get_quotes(symbols).items()}
 
     def health(self) -> ProviderHealth:
+        """返回首个健康行情源的健康状态。"""
         try:
             primary = self.primary.health()
             if primary.healthy:
@@ -140,6 +163,7 @@ class AKShareQuoteProvider:
         self._module = akshare_module
 
     def _load(self) -> object:
+        """延迟加载可选 AKShare 依赖。"""
         if self._module is None:
             import akshare  # type: ignore[import-not-found]
 
@@ -147,6 +171,7 @@ class AKShareQuoteProvider:
         return self._module
 
     def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """从 AKShare 全市场快照中提取请求证券。"""
         module = self._load()
         result: dict[str, QuoteSnapshot] = {}
         fetch = getattr(module, "stock_zh_a_spot_em")
@@ -180,9 +205,225 @@ class AKShareQuoteProvider:
         return result
 
     def health(self) -> ProviderHealth:
+        """只检查 AKShare 是否可导入，不发起网络请求。"""
         try:
             self._load()
         except Exception as exc:
             return ProviderHealth(provider=self.name, healthy=False, message=str(exc))
         return ProviderHealth(provider=self.name, healthy=True)
+
+
+class EastmoneyQuoteProvider:
+    """东方财富 A 股批量行情源，使用标准库 HTTP 和精确 Decimal 解析。"""
+
+    name = "eastmoney"
+    supported_markets = frozenset({"SH", "SZ", "BJ"})
+    _endpoint = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    _fields = "f12,f13,f14,f2,f3,f18,f124"
+    _max_response_bytes = 2 * 1024 * 1024
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: Decimal | str | int | float = Decimal("5"),
+        transport: Callable[[Request, float], bytes] | None = None,
+        now: Callable[[], datetime] | None = None,
+        max_batch_size: int = 100,
+        max_symbols: int = 1000,
+    ) -> None:
+        """校验超时和工作量限制并保存可注入传输。"""
+        timeout = (
+            Decimal(str(timeout_seconds))
+            if isinstance(timeout_seconds, float)
+            else ensure_decimal(timeout_seconds, field="timeout_seconds")
+        )
+        if not timeout.is_finite() or timeout <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
+        if max_batch_size <= 0 or max_batch_size > 100:
+            raise ValueError("max_batch_size must be between 1 and 100")
+        if max_symbols <= 0:
+            raise ValueError("max_symbols must be positive")
+        self.timeout_seconds = timeout
+        self._transport = transport or self._default_transport
+        self._now = now or _now
+        self.max_batch_size = max_batch_size
+        self.max_symbols = max_symbols
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """判断证券是否属于当前 A 股行情源支持的市场。"""
+        canonical = canonical_symbol(symbol)
+        if ":" not in canonical:
+            return False
+        market, code = canonical.split(":", 1)
+        return market in self.supported_markets and len(code) == 6 and code.isdigit()
+
+    def _default_transport(self, request: Request, timeout_seconds: float) -> bytes:
+        """执行有响应大小上限的同步 HTTPS 请求。"""
+        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > self._max_response_bytes:
+                raise ValueError("eastmoney response exceeds size limit")
+            body = response.read(self._max_response_bytes + 1)
+        if len(body) > self._max_response_bytes:
+            raise ValueError("eastmoney response exceeds size limit")
+        return body
+
+    @staticmethod
+    def _reject_json_constant(value: str) -> object:
+        """拒绝 JSON 中的 NaN 和 Infinity 非有限常量。"""
+        raise ValueError(f"invalid JSON numeric constant: {value}")
+
+    @staticmethod
+    def _optional_decimal(value: object, *, field_name: str) -> Decimal | None:
+        """解析可缺失的有限十进制字段。"""
+        if value in (None, "", "-"):
+            return None
+        return ensure_decimal(value, field=field_name)
+
+    @staticmethod
+    def _upstream_market(market: str) -> int:
+        """把公开市场标识映射为东方财富市场编号。"""
+        return 1 if market == "SH" else 0
+
+    @staticmethod
+    def _normalize_code(value: object) -> str:
+        """把上游证券代码规整为六位数字字符串。"""
+        raw = str(value).strip()
+        if raw.endswith(".0"):
+            raw = raw[:-2]
+        return raw.zfill(6)
+
+    @staticmethod
+    def _source_time(value: object) -> datetime | None:
+        """把上游 Unix 秒时间戳转换为 UTC 时间。"""
+        if value in (None, "", "-"):
+            return None
+        try:
+            seconds = int(ensure_decimal(value, field="source_time"))
+            if seconds <= 0:
+                return None
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, TypeError, ValueError):
+            return None
+
+    def _request_batch(self, symbols: Sequence[str]) -> list[dict[str, object]]:
+        """请求一个不超过一百只证券的行情批次。"""
+        secids: list[str] = []
+        for symbol in symbols:
+            market, code = canonical_symbol(symbol).split(":", 1)
+            secids.append(f"{self._upstream_market(market)}.{code}")
+        query = urlencode({"fltt": "2", "secids": ",".join(secids), "fields": self._fields})
+        request = Request(
+            f"{self._endpoint}?{query}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "wing-trade/0.1 (+backend market data)",
+            },
+        )
+        body = self._transport(request, float(self.timeout_seconds))
+        if len(body) > self._max_response_bytes:
+            raise ValueError("eastmoney response exceeds size limit")
+        text = body.decode("utf-8") if isinstance(body, bytes) else str(body)
+        payload = json.loads(
+            text,
+            parse_float=Decimal,
+            parse_int=int,
+            parse_constant=self._reject_json_constant,
+        )
+        if not isinstance(payload, Mapping):
+            raise ValueError("eastmoney response must be an object")
+        data = payload.get("data")
+        if not isinstance(data, Mapping):
+            return []
+        rows = data.get("diff", [])
+        if not isinstance(rows, list):
+            raise ValueError("eastmoney data.diff must be a list")
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _snapshot_from_row(
+        self,
+        row: Mapping[str, object],
+        *,
+        symbol: str,
+        fetched_at: datetime,
+    ) -> QuoteSnapshot | None:
+        """把单条上游记录转换为有效报价，无效记录返回空。"""
+        try:
+            last_price = self._optional_decimal(row.get("f2"), field_name="last_price")
+            prev_close = self._optional_decimal(row.get("f18"), field_name="prev_close")
+            if last_price is None or last_price <= 0:
+                return None
+            if prev_close is not None and prev_close <= 0:
+                return None
+        except (TypeError, ValueError):
+            return None
+        try:
+            change_pct = self._optional_decimal(row.get("f3"), field_name="change_pct")
+        except (TypeError, ValueError):
+            change_pct = None
+        return QuoteSnapshot(
+            symbol=symbol,
+            last_price=last_price,
+            prev_close=prev_close,
+            change_pct=change_pct,
+            source_time=self._source_time(row.get("f124")),
+            fetched_at=fetched_at,
+            provider=self.name,
+        )
+
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """批量读取支持的 A 股行情，并按规范证券代码返回精确快照。"""
+        requested: list[str] = []
+        seen: set[str] = set()
+        for value in symbols:
+            canonical = canonical_symbol(value)
+            if canonical in seen or not self.supports_symbol(canonical):
+                continue
+            seen.add(canonical)
+            requested.append(canonical)
+        if not requested:
+            return {}
+        if len(requested) > self.max_symbols:
+            raise ValueError("eastmoney quote request exceeds cumulative symbol limit")
+
+        result: dict[str, QuoteSnapshot] = {}
+        batch_error: Exception | None = None
+        for offset in range(0, len(requested), self.max_batch_size):
+            batch = requested[offset : offset + self.max_batch_size]
+            try:
+                rows = self._request_batch(batch)
+            except Exception as exc:
+                batch_error = exc
+                continue
+            fetched_at = self._now()
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            canonical_by_identity = {
+                (self._upstream_market(canonical.split(":", 1)[0]), canonical.split(":", 1)[1]): canonical
+                for canonical in batch
+            }
+            for row in rows:
+                try:
+                    identity = (int(str(row.get("f13"))), self._normalize_code(row.get("f12")))
+                except (TypeError, ValueError):
+                    continue
+                resolved_symbol = canonical_by_identity.get(identity)
+                if resolved_symbol is None:
+                    continue
+                snapshot = self._snapshot_from_row(
+                    row, symbol=resolved_symbol, fetched_at=fetched_at
+                )
+                if snapshot is not None:
+                    result[resolved_symbol] = snapshot
+        if batch_error is not None and not result:
+            raise batch_error
+        return result
+
+    def health(self) -> ProviderHealth:
+        """报告行情源已完成配置，不在健康检查时访问公网。"""
+        return ProviderHealth(
+            provider=self.name,
+            healthy=True,
+            message="行情源已配置，连通性在刷新时检查",
+        )
 

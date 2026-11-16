@@ -3,6 +3,8 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: sqlite:////app/data/ashare_journal.db
+      QUOTE_PROVIDER: ${QUOTE_PROVIDER:-eastmoney}
+      QUOTE_TIMEOUT_SECONDS: ${QUOTE_TIMEOUT_SECONDS:-5}
     volumes:
       - ./data:/app/data
     ports:

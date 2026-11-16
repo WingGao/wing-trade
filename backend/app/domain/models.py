@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
 from .enums import CalcBasis, MatchingMethod
 from .exceptions import NegativeFeeError
-from .precision import round_amount, round_price, round_qty, ensure_decimal
+from .precision import ensure_decimal, round_amount, round_qty
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,8 +91,21 @@ class PositionMetrics:
     average_cost: Decimal
     realized_pnl: Decimal = Decimal("0.0000")
     unrealized_pnl: Decimal | None = None
+    unrealized_return_pct: Decimal | None = None
     strategy_breakeven_price: Decimal | None = None
     funds_recovered_surplus: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LowestPriceGroupMetrics:
+    """同一最低原始买入价下全部剩余批次合并后的估值指标。"""
+
+    purchase_price: Decimal
+    lot_count: int
+    remaining_qty: Decimal
+    remaining_cost: Decimal
+    unrealized_pnl: Decimal | None = None
+    unrealized_return_pct: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

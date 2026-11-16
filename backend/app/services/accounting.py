@@ -3,8 +3,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from decimal import Decimal
 
-from app.domain.models import BuyCalculation, Fees, PositionMetrics, SellCalculation
 from app.domain.exceptions import InvalidPriceError, InvalidQuantityError
+from app.domain.models import (
+    BuyCalculation,
+    Fees,
+    LowestPriceGroupMetrics,
+    PositionMetrics,
+    SellCalculation,
+)
 from app.domain.precision import ensure_decimal, round_amount, round_price, round_qty
 
 
@@ -101,6 +107,7 @@ class AccountingService:
         total_buy_cash_out: object | None = None,
         total_sell_cash_in: object | None = None,
     ) -> PositionMetrics:
+        """计算一组批次的数量、成本、收益和回本参考指标。"""
         lot_list = list(lots)
         remaining_qty = round_qty(
             sum((ensure_decimal(getattr(lot, "remaining_qty")) for lot in lot_list), Decimal("0"))
@@ -126,7 +133,84 @@ class AccountingService:
             average_cost=average_cost,
             realized_pnl=round_amount(realized_pnl),
             unrealized_pnl=unrealized,
+            unrealized_return_pct=AccountingService.return_pct(unrealized, remaining_cost),
             strategy_breakeven_price=breakeven,
             funds_recovered_surplus=surplus,
+        )
+
+    @staticmethod
+    def return_pct(profit: object | None, cost: object) -> Decimal | None:
+        """在成本分母为正时按百分比单位计算收益率。"""
+        denominator = round_amount(cost)
+        if profit is None or denominator <= 0:
+            return None
+        return round_price(ensure_decimal(profit) / denominator * Decimal("100"))
+
+    @staticmethod
+    def lowest_price_group_metrics(
+        lots: Iterable[object],
+        *,
+        latest_price: object | None = None,
+        account_id: str | None = None,
+        security_id: str | None = None,
+        strategy_id: str | None = None,
+    ) -> LowestPriceGroupMetrics | None:
+        """合并最低原始买入成交价下的全部有效剩余批次并计算估值。"""
+        lot_list = list(lots)
+        eligible: list[object] = []
+        for lot in lot_list:
+            if getattr(lot, "status", None) != "OPEN":
+                continue
+            buy_trade = getattr(lot, "buy_trade", None)
+            if (
+                buy_trade is None
+                or getattr(buy_trade, "status", None) != "ACTIVE"
+                or getattr(buy_trade, "side", None) != "BUY"
+            ):
+                continue
+            if round_qty(getattr(lot, "remaining_qty", 0)) <= 0:
+                continue
+            eligible.append(lot)
+        if not eligible:
+            return None
+
+        scope_account = account_id or getattr(eligible[0], "account_id", None)
+        scope_security = security_id or getattr(eligible[0], "security_id", None)
+        scope_strategy = strategy_id or getattr(eligible[0], "strategy_id", None)
+        eligible = [
+            lot
+            for lot in eligible
+            if getattr(lot, "account_id", None) == scope_account
+            and getattr(lot, "security_id", None) == scope_security
+            and getattr(lot, "strategy_id", None) == scope_strategy
+        ]
+        if not eligible:
+            return None
+
+        prices = [
+            round_price(getattr(getattr(lot, "buy_trade"), "price"))
+            for lot in eligible
+        ]
+        lowest = min(prices)
+        selected = [lot for lot, price in zip(eligible, prices, strict=True) if price == lowest]
+        remaining_qty = round_qty(
+            sum((ensure_decimal(getattr(lot, "remaining_qty")) for lot in selected), Decimal("0"))
+        )
+        remaining_cost = round_amount(
+            sum((ensure_decimal(getattr(lot, "remaining_cost")) for lot in selected), Decimal("0"))
+        )
+        price = round_price(latest_price) if latest_price is not None else None
+        unrealized = (
+            round_amount(price * remaining_qty - remaining_cost)
+            if price is not None and price > 0
+            else None
+        )
+        return LowestPriceGroupMetrics(
+            purchase_price=lowest,
+            lot_count=len(selected),
+            remaining_qty=remaining_qty,
+            remaining_cost=remaining_cost,
+            unrealized_pnl=unrealized,
+            unrealized_return_pct=AccountingService.return_pct(unrealized, remaining_cost),
         )
 

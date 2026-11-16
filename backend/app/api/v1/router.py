@@ -3,23 +3,36 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, request_actor, resolve_account, resolve_strategy, validate_account_security
+from app.api.deps import (
+    get_db,
+    request_actor,
+    resolve_account,
+    resolve_strategy,
+    validate_account_security,
+)
 from app.api.schemas.account import AccountCreate
+from app.api.schemas.dashboard import DashboardRead
 from app.api.schemas.security import SecurityCreate, WatchlistItemCreate
 from app.api.schemas.target import ProfitTargetCreate, ProfitTargetPatch
-from app.api.schemas.trade import BuyTradeRequest, SellPreviewRequest, SellTradeRequest, VoidTradeRequest
+from app.api.schemas.trade import (
+    BuyTradeRequest,
+    SellPreviewRequest,
+    SellTradeRequest,
+    VoidTradeRequest,
+)
 from app.api.utils import begin_write, fees_from, finish_write
 from app.domain.enums import CalcBasis, MatchingMethod, TradeSide, TradeStatus
 from app.domain.exceptions import EntityNotFoundError, ValidationError
+from app.domain.markets import currency_for_market
 from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_qty
-from app.market_data import MockQuoteProvider, QuoteCollector
+from app.market_data import QuoteCollector, create_quote_provider
 from app.models.ledger import (
     Account,
     Cycle,
@@ -34,13 +47,12 @@ from app.models.ledger import (
 )
 from app.services.accounting import AccountingService
 from app.services.cycle import CycleService
+from app.services.dashboard import DashboardService
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
 from app.services.target import TargetService
-from app.domain.markets import currency_for_market
 
-
-quote_collector = QuoteCollector(MockQuoteProvider())
+quote_collector = QuoteCollector(create_quote_provider())
 
 router = APIRouter(prefix="/api/v1")
 
@@ -366,9 +378,9 @@ def list_positions(account_id: str | None = Query(default=None, alias="accountId
         buy_cash = Decimal("0")
         sell_cash = Decimal("0")
         for cycle_id in cycle_ids:
-            metrics = CycleService.cycle_cash_metrics(session, cycle_id)
-            buy_cash += metrics["total_buy_cash_out"] or Decimal("0")
-            sell_cash += metrics["total_sell_cash_in"] or Decimal("0")
+            cycle_metrics = CycleService.cycle_cash_metrics(session, cycle_id)
+            buy_cash += cycle_metrics["total_buy_cash_out"] or Decimal("0")
+            sell_cash += cycle_metrics["total_sell_cash_in"] or Decimal("0")
         metrics = AccountingService.position_metrics(group, realized_pnl=realized, total_buy_cash_out=buy_cash, total_sell_cash_in=sell_cash)
         quote = session.get(QuoteCache, security_id)
         if quote is not None:
@@ -538,4 +550,22 @@ async def list_quotes(
             }
         )
     return {"quotes": items}
+
+
+@router.get("/dashboard", response_model=DashboardRead)
+async def dashboard(
+    account_id: str | None = Query(default=None, alias="accountId"),
+    include_closed: bool = Query(default=False, alias="includeClosed"),
+    mode: Literal["cache", "auto", "manual"] = Query(default="auto"),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """返回账务、持仓、行情和汇总来自同一估值切片的首页数据。"""
+    resolved_account_id = resolve_account(session, account_id)
+    service = DashboardService(quote_collector)
+    return await service.build(
+        session,
+        account_id=resolved_account_id,
+        include_closed=include_closed,
+        mode=mode,
+    )
 

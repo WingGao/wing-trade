@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
-from typing import Iterable, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,22 +18,27 @@ class QuoteService:
     """Persistence and domain boundary for shared quote-cache rows."""
 
     def __init__(self, calendar: AShareTradingCalendar | None = None) -> None:
+        """初始化 A 股与美股缓存新鲜度日历。"""
         self.calendar = calendar or AShareTradingCalendar()
         self.us_calendar = USTradingCalendar()
 
     def calendar_for_security(self, security: Security) -> AShareTradingCalendar:
+        """返回证券所属市场的交易日历。"""
         return self.us_calendar if security.market.upper() == "US" else self.calendar
 
     @staticmethod
     def security_symbol(security: Security) -> str:
+        """返回证券的规范行情代码。"""
         return canonical_symbol(f"{security.market}:{security.symbol}")
 
     def securities_for_symbols(self, session: Session, symbols: Sequence[str]) -> dict[str, Security]:
+        """按规范代码查找数据库中已登记的证券。"""
         wanted = {canonical_symbol(value) for value in symbols}
         rows = session.scalars(select(Security)).all()
         return {self.security_symbol(row): row for row in rows if self.security_symbol(row) in wanted}
 
     def symbols_for_scope(self, session: Session) -> dict[str, Security]:
+        """返回现有持仓和自选范围对应的证券映射。"""
         rows = session.scalars(select(Security)).all()
         watch_ids = set(session.scalars(select(Lot.security_id).where(Lot.status == "OPEN")).all())
         # Include watchlist securities without introducing an ORM relationship
@@ -44,32 +49,45 @@ class QuoteService:
         return {self.security_symbol(row): row for row in rows if row.id in watch_ids}
 
     def read_cached(self, session: Session, securities: Iterable[Security], *, now: datetime | None = None) -> list[QuoteSnapshot]:
+        """读取请求证券的共享缓存，并计算缓存是否过期。"""
         current = now or datetime.now(timezone.utc)
         result: list[QuoteSnapshot] = []
         for security in securities:
             row = session.get(QuoteCache, security.id)
             if row is None:
                 continue
-            stale = row.is_stale or self.calendar_for_security(security).is_stale(row.fetched_at, now=current)
-            result.append(
-                QuoteSnapshot(
-                    symbol=self.security_symbol(security),
-                    last_price=row.last_price,
-                    prev_close=row.prev_close,
-                    change_pct=row.change_pct,
-                    source_time=row.source_time,
-                    fetched_at=row.fetched_at,
-                    provider=row.provider,
-                    is_stale=stale,
-                )
+            fetched_at = self._as_utc(row.fetched_at)
+            source_time = self._as_utc(row.source_time) if row.source_time is not None else None
+            stale = row.is_stale or self.calendar_for_security(security).is_stale(
+                fetched_at, now=current
             )
+            try:
+                result.append(
+                    QuoteSnapshot(
+                        symbol=self.security_symbol(security),
+                        last_price=row.last_price,
+                        prev_close=row.prev_close,
+                        change_pct=row.change_pct,
+                        source_time=source_time,
+                        fetched_at=fetched_at,
+                        provider=row.provider,
+                        is_stale=stale,
+                    )
+                )
+            except (TypeError, ValueError):
+                # 旧缓存可能来自更宽松版本；无效价格按无行情处理，不能改写成零。
+                continue
         return result
 
     def upsert(self, session: Session, snapshots: Iterable[QuoteSnapshot], *, now: datetime | None = None) -> list[QuoteSnapshot]:
+        """把有效行情写入共享缓存并评估止盈提醒。"""
         current = now or datetime.now(timezone.utc)
         result: list[QuoteSnapshot] = []
+        target_snapshots: list[QuoteSnapshot] = []
         securities = {self.security_symbol(row): row for row in session.scalars(select(Security)).all()}
         for snapshot in snapshots:
+            if snapshot.last_price <= 0 or snapshot.is_stale:
+                continue
             security = securities.get(canonical_symbol(snapshot.symbol))
             if security is None:
                 continue
@@ -80,16 +98,24 @@ class QuoteService:
             row.last_price = round_price(snapshot.last_price)
             row.prev_close = round_price(snapshot.prev_close) if snapshot.prev_close is not None else None
             row.change_pct = round_price(snapshot.change_pct) if snapshot.change_pct is not None else None
-            row.source_time = snapshot.source_time
-            row.fetched_at = snapshot.fetched_at or current
+            row.source_time = self._as_utc(snapshot.source_time) if snapshot.source_time else None
+            fetched_at = self._as_utc(snapshot.fetched_at or current)
+            row.fetched_at = fetched_at
             row.provider = snapshot.provider
-            row.is_stale = snapshot.is_stale
-            result.append(snapshot)
+            stale = snapshot.is_stale or self.calendar_for_security(security).is_stale(
+                fetched_at, now=current
+            )
+            row.is_stale = stale
+            stored = snapshot.stale() if stale else snapshot
+            result.append(stored)
+            if not stale:
+                target_snapshots.append(stored)
         session.flush()
-        self.evaluate_targets(session, result, at=current)
+        self.evaluate_targets(session, target_snapshots, at=current)
         return result
 
     def mark_stale(self, session: Session, securities: Iterable[Security]) -> list[QuoteSnapshot]:
+        """把请求范围内的全部缓存行情标记为过期。"""
         securities = list(securities)
         snapshots: list[QuoteSnapshot] = []
         for snapshot in self.read_cached(session, securities):
@@ -101,7 +127,29 @@ class QuoteService:
         session.flush()
         return snapshots
 
+    def mark_missing_stale(
+        self,
+        session: Session,
+        securities: Iterable[Security],
+        *,
+        received_symbols: set[str],
+        now: datetime | None = None,
+    ) -> list[QuoteSnapshot]:
+        """将本次未收到有效行情的缓存标记为过期并返回完整缓存范围。"""
+        security_list = list(securities)
+        received = {canonical_symbol(symbol) for symbol in received_symbols}
+        for security in security_list:
+            symbol = self.security_symbol(security)
+            if symbol in received:
+                continue
+            row = session.get(QuoteCache, security.id)
+            if row is not None:
+                row.is_stale = True
+        session.flush()
+        return self.read_cached(session, security_list, now=now)
+
     def evaluate_targets(self, session: Session, snapshots: Iterable[QuoteSnapshot], *, at: datetime | None = None) -> int:
+        """只根据有效行情触发活动止盈提醒。"""
         current = at or datetime.now(timezone.utc)
         by_symbol = {canonical_symbol(snapshot.symbol): snapshot for snapshot in snapshots}
         triggered = 0
@@ -122,4 +170,9 @@ class QuoteService:
         if triggered:
             session.flush()
         return triggered
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        """把数据库返回的无时区时间按 UTC 补齐时区。"""
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 

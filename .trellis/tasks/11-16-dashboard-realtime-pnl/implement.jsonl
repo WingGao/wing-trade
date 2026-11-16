@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/directory-structure.md","reason":"保持传输层、服务层、行情和核算边界。"}
+{"file":".trellis/spec/backend/market-data-guidelines.md","reason":"复用缓存、过期回退、节流、熔断及仅由有效行情触发的提醒。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"使用纯 Decimal 确定性计算，并执行后端质量检查。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"按结构化字段记录行情降级，遵守日志载荷边界。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"扩展现有 Element Plus 组件，保留首页交互。"}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"在页面和 store 边界管理请求与安全轮询生命周期。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"在 Pinia 中保留一致的服务端估值和精确十进制字符串。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"保持共享 DTO、类型化 API 方法与后端字段别名一致。"}
+{"file":".trellis/tasks/11-16-dashboard-realtime-pnl/research/repository-findings.md","reason":"加载代码定位、最低价全部批次合并澄清及兼容约束。"}
+{"file":".trellis/tasks/11-16-dashboard-realtime-pnl/research/ashare-provider.md","reason":"加载已验证的批量接口、数值字段、时限及不新增 SDK 的接入方案。"}
