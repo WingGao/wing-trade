@@ -2,6 +2,9 @@ frontend/node_modules/
 frontend/dist/
 frontend/test-results/
 .pnpm-store/
+.uv-cache/
+backend/*.egg-info/
+ledger.db*
 backend/**/__pycache__/
 __pycache__/
 *.pyc

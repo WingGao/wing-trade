@@ -32,6 +32,8 @@ export interface Quote {
 export interface Position {
   securityId: string
   market?: string | null
+  symbol?: string | null
+  name?: string | null
   currency?: 'CNY' | 'USD' | null
   strategyId: string
   remainingQty: string

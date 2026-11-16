@@ -373,7 +373,7 @@ def list_positions(account_id: str | None = Query(default=None, alias="accountId
         quote = session.get(QuoteCache, security_id)
         if quote is not None:
             metrics = AccountingService.position_metrics(group, latest_price=quote.last_price, realized_pnl=realized, total_buy_cash_out=buy_cash, total_sell_cash_in=sell_cash)
-        result.append({"securityId": security_id, "market": security.market if security else None, "currency": currency_for_market(security.market) if security else None, "strategyId": strategy_id, "remainingQty": _fmt(metrics.remaining_qty), "remainingCost": _fmt(metrics.remaining_cost), "averageCost": _fmt(metrics.average_cost, 6), "realizedPnl": _fmt(metrics.realized_pnl), "unrealizedPnl": _fmt(metrics.unrealized_pnl), "strategyBreakevenPrice": _fmt(metrics.strategy_breakeven_price, 6), "fundsRecoveredSurplus": _fmt(metrics.funds_recovered_surplus)})
+        result.append({"securityId": security_id, "market": security.market if security else None, "symbol": security.symbol if security else None, "name": security.name if security else None, "currency": currency_for_market(security.market) if security else None, "strategyId": strategy_id, "remainingQty": _fmt(metrics.remaining_qty), "remainingCost": _fmt(metrics.remaining_cost), "averageCost": _fmt(metrics.average_cost, 6), "realizedPnl": _fmt(metrics.realized_pnl), "unrealizedPnl": _fmt(metrics.unrealized_pnl), "strategyBreakevenPrice": _fmt(metrics.strategy_breakeven_price, 6), "fundsRecoveredSurplus": _fmt(metrics.funds_recovered_surplus)})
     return result
 
 

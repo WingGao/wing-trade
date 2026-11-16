@@ -18,7 +18,7 @@ pnpm install
 pnpm run dev
 ```
 
-后端依赖 Python 3.12，运行 `uvicorn app.main:app --reload --app-dir backend`。前端开发服务器会把 `/api` 代理到 `localhost:8000`。
+后端依赖 Python 3.12，使用 `uv run --cache-dir .uv-cache --project backend --with "uvicorn[standard]>=0.30,<1.0" python -m uvicorn app.main:app --reload --app-dir backend` 启动。前端开发服务器会把 `/api` 代理到 `localhost:8000`。
 
 ## 质量检查
 

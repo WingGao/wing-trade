@@ -14,6 +14,9 @@ failures separate from ledger failures.
 - Render quote source time and an explicit stale/unavailable state beside prices.
 - Send sell previews to the server before submitting a sell and include a
   unique client request ID.
+- Keep a visible quick trade entry on the dashboard: search a security first,
+  then reuse BuyTradeDialog or SellMatchDrawer rather than duplicating trade
+  forms in the page.
 - Keep settled lots behind the includeClosed preference while preserving the
   server summary values.
 
@@ -29,7 +32,8 @@ failures separate from ledger failures.
 
 - pnpm run type-check and pnpm run build must pass.
 - Playwright covers navigation, offline quote rendering, settled-lot toggling,
-  and the core buy/sell/target flow when a backend fixture is available.
+  quick buy/sell entry after selecting a security, and the core buy/sell/target
+  flow when a backend fixture is available.
 - API client errors must leave ledger pages usable when the quote endpoint fails.
 
 ## Code Review Checklist

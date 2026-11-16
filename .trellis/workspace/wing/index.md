@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 8
 - **Last Active**: 2026-11-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~141 | Active |
+| `journal-1.md` | ~207 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-11-06 | US equity support implementation | `b06f983` | `master` |
+| 7 | 2026-11-06 | Expose quick trade entry in dashboard | - | `master` |
 | 6 | 2026-11-06 | Final A-share MVP integration validation | `7bbdcd5` | `master` |
 | 5 | 2026-11-06 | Complete project development guidelines | `489058e` | `master` |
 | 4 | 2026-11-05 | M1 frontend MVP workbench and deployment | `a613853`, `35eb25f` | `master` |

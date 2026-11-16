@@ -139,3 +139,69 @@ Completed parent integration review for the A-share portfolio MVP. Backend pytes
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Expose quick trade entry in dashboard
+<!-- trellis-session: v=2 fp=c395b9345d613252 -->
+
+**Date**: 2026-11-06
+**Task**: Expose quick trade entry in dashboard
+**Branch**: `master`
+
+### Summary
+
+Recorded the quick trade UX and development runtime fixes in Trellis. The dashboard now searches securities and opens the existing buy dialog or sell preview drawer; the uv backend command uses a project-local cache and python -m uvicorn; the market calendar falls back to fixed UTC+8 when Windows tzdata is unavailable.
+
+### Main Changes
+
+- Added dashboard quick buy/sell entry with security search and selected-lot loading.
+- Added Playwright coverage for visible buy and sell actions.
+- Documented uv startup and timezone fallback conventions.
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] pnpm run type-check passed.
+- [OK] pnpm run build passed.
+- [OK] pnpm run test:e2e passed: 3 tests.
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 8: US equity support implementation
+<!-- trellis-session: v=2 fp=6a356912c92a25e9 -->
+
+**Date**: 2026-11-06
+**Task**: US equity support implementation
+**Branch**: `master`
+
+### Summary
+
+Implemented isolated USD accounts and US equity/ETF support. Added US market validation and currency isolation, account list/create APIs, US timezone/calendar selection, currency-aware API payloads, frontend account selection and USD buy/sell labels, and regression coverage. Backend pytest passed 11 tests; frontend type-check/build passed; Playwright passed 3 tests. Live US provider remains replaceable/deferred, and fixed-offset New York fallback requires tzdata for DST correctness.
+
+### Main Changes
+
+- Added US:SYMBOL and USD account contracts without FX conversion.
+- Added cross-currency rejection and currency-aware frontend quick trade flow.
+- Added US calendar selection and integration coverage.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b06f983` | feat: add isolated US equity support |
+
+### Testing
+
+- [OK] python -m pytest -q: 11 passed.
+- [OK] pnpm --dir frontend run type-check/build: passed.
+- [OK] pnpm --dir frontend run test:e2e: 3 passed.
+
+### Status
+
+[OK] **Completed**

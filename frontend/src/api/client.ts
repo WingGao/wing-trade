@@ -28,6 +28,7 @@ export const api = {
   summary: () => request<AnalyticsSummary>(`/analytics/summary`),
   quotes: (symbols?: string[], refresh = false) => request<{ quotes: Quote[] }>(`/quotes?${query({ symbols: symbols?.join(','), refresh })}`),
   securities: (search = '') => request<Security[]>(`/securities?${query({ query: search })}`),
+  createSecurity: (payload: Record<string, unknown>) => request<Security>('/securities', { method: 'POST', body: JSON.stringify(payload) }),
   lots: (securityId: string, includeClosed = false, accountId?: string) => request<{ lots: Lot[]; closedLotCount: number; realizedPnl: string }>(`/securities/${securityId}/lots?${query({ includeClosed, accountId })}`),
   trades: () => request<Trade[]>('/trades'),
   cycles: (securityId?: string) => request<unknown[]>(`/cycles?${query({ securityId, includeClosed: true })}`),
