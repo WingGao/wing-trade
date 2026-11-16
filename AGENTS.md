@@ -19,3 +19,8 @@ If you're using Codex or another agent-capable tool, additional project-scoped h
 Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
 
 <!-- TRELLIS:END -->
+
+## 开发要求
+
+- 所有文档都应该使用中文
+- 所有方法必须要有注释

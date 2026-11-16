@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
-- **Last Active**: 2026-11-06
+- **Total Sessions**: 9
+- **Last Active**: 2026-11-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~207 | Active |
+| `journal-1.md` | ~229 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-11-16 | Dashboard-A股实时行情与浮盈 | `be58bf6` | `11-16-dashboard-realtime-pnl` |
 | 8 | 2026-11-06 | US equity support implementation | `b06f983` | `master` |
 | 7 | 2026-11-06 | Expose quick trade entry in dashboard | - | `master` |
 | 6 | 2026-11-06 | Final A-share MVP integration validation | `7bbdcd5` | `master` |

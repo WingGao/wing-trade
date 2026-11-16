@@ -205,3 +205,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: Dashboard-A股实时行情与浮盈
+<!-- trellis-session: v=2 fp=7c5718500ef01758 -->
+
+**Date**: 2026-11-16
+**Task**: Dashboard-A股实时行情与浮盈
+**Branch**: `11-16-dashboard-realtime-pnl`
+
+### Summary
+
+实现A股实时行情、统一浮盈估值、首页轮询与降级；后端33个测试、前端构建和6个E2E通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `be58bf6` | feat:dashboard-realtime-ashare-valuation |
+
+### Status
+
+[OK] **Completed**
