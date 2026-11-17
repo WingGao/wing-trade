@@ -209,6 +209,7 @@ class TradeLedgerService:
         qty: object,
         price: object,
         matches: Iterable[MatchRequest | dict[str, object] | tuple[str, object]] | None = None,
+        matching_method: MatchingMethod = MatchingMethod.FIFO,
         fees: Fees | None = None,
         client_request_id: str | None = None,
         source: TradeSource | str = TradeSource.MANUAL,
@@ -218,6 +219,7 @@ class TradeLedgerService:
         commit: bool = True,
         **fee_values: object,
     ) -> Trade:
+        """按明确批次或指定自动策略记录卖出并更新批次与周期。"""
         duplicate = self._check_duplicate(account_id, client_request_id)
         if duplicate is not None:
             return duplicate
@@ -244,8 +246,16 @@ class TradeLedgerService:
         lot_before = {lot.id: self._lot_snapshot(lot) for lot in lots}
         cycle_before = self._cycle_snapshot(cycle)
         if matches is None:
-            requests = MatchingService.fifo_preview(lots, calculation.qty)
-            method = MatchingMethod.FIFO
+            method = MatchingMethod(matching_method)
+            requests = MatchingService.auto_preview(
+                lots,
+                calculation.qty,
+                method=method,
+                sell_executed_at=executed_at,
+                account_id=account_id,
+                security_id=security_id,
+                strategy_id=strategy_id,
+            )
         else:
             requests = MatchingService.normalize_requests(matches)
             method = MatchingMethod.MANUAL

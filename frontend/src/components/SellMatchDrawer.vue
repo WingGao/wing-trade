@@ -1,17 +1,179 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
-import type { Lot, SellPreview } from '../api/types'
-const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string; currency?: string }>()
+import type { Currency, Lot, SellPreview } from '../api/types'
+import { formatDateTime, formatDecimal, formatMoney, trendClass } from '../utils/format'
+
+interface PreviewInput {
+  accountId?: string
+  securityId: string
+  qty: string
+  price: string
+  executedAt: string
+  key: string
+}
+
+const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string; currency?: Currency }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
 const form = reactive({ qty: '', price: '', executedAt: new Date().toISOString().slice(0, 16) })
-const preview = ref<SellPreview | null>(null); const loading = ref(false); const submitting = ref(false)
-const matches = computed(() => preview.value?.matches ?? [])
-async function previewSell() { loading.value = true; try { preview.value = await api.previewSell({ accountId: props.accountId, securityId: props.securityId, qty: form.qty, price: form.price, executedAt: new Date(form.executedAt).toISOString() }) } catch (error) { ElMessage.error(error instanceof Error ? error.message : '预览失败') } finally { loading.value = false } }
-async function submit() { submitting.value = true; try { await api.sell({ accountId: props.accountId, securityId: props.securityId, qty: form.qty, price: form.price, executedAt: new Date(form.executedAt).toISOString(), clientRequestId: crypto.randomUUID(), matches: matches.value.map((match) => ({ lotId: match.lotId, matchedQty: match.matchedQty })) }); ElMessage.success('卖出已记账'); visible.value = false; emit('saved') } catch (error) { ElMessage.error(error instanceof Error ? error.message : '卖出失败') } finally { submitting.value = false } }
+const preview = ref<SellPreview | null>(null)
+const previewInput = ref<PreviewInput | null>(null)
+const loading = ref(false)
+const submitting = ref(false)
+let previewGeneration = 0
+
+/** 将表单时间安全转换为接口使用的 ISO 时间。 */
+function executedAtIso(): string {
+  const parsed = new Date(form.executedAt)
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString()
+}
+
+/** 为当前账户、证券和卖出输入生成不可变预览快照。 */
+function buildPreviewInput(): PreviewInput {
+  const accountId = props.accountId
+  const input = {
+    accountId,
+    securityId: props.securityId,
+    qty: form.qty.trim(),
+    price: form.price.trim(),
+    executedAt: executedAtIso(),
+  }
+  return { ...input, key: JSON.stringify([input.accountId ?? '', input.securityId, input.qty, input.price, input.executedAt]) }
+}
+
+const currentPreviewKey = computed(() => buildPreviewInput().key)
+const previewCurrency = computed<Currency | null>(() => preview.value?.currency ?? props.currency ?? null)
+const canSubmit = computed(() => Boolean(preview.value && previewInput.value?.key === currentPreviewKey.value && !loading.value))
+
+/** 清除旧预览并推进代次，使在途旧响应无法恢复确认状态。 */
+function invalidatePreview() {
+  previewGeneration += 1
+  preview.value = null
+  previewInput.value = null
+  loading.value = false
+}
+
+/** 返回批次短编号，完整编号保留在提示中。 */
+function shortLotId(lotId: string): string {
+  return lotId.slice(0, 8)
+}
+
+watch(() => [props.accountId, props.securityId, form.qty, form.price, form.executedAt], invalidatePreview)
+watch(visible, (open) => { if (!open) invalidatePreview() })
+
+/** 请求最近买入优先的服务端配对预览，并丢弃已过期响应。 */
+async function previewSell() {
+  const input = buildPreviewInput()
+  if (!input.qty || !input.price || !input.executedAt) {
+    ElMessage.warning('请填写有效的卖出数量、价格和成交时间')
+    return
+  }
+  const generation = ++previewGeneration
+  preview.value = null
+  previewInput.value = null
+  loading.value = true
+  try {
+    const result = await api.previewSell({
+      accountId: input.accountId,
+      securityId: input.securityId,
+      qty: input.qty,
+      price: input.price,
+      executedAt: input.executedAt,
+      matchingMethod: 'LIFO',
+    })
+    if (generation !== previewGeneration) return
+    preview.value = result
+    previewInput.value = input
+  } catch (error) {
+    if (generation === previewGeneration) ElMessage.error(error instanceof Error ? error.message : '预览失败')
+  } finally {
+    if (generation === previewGeneration) loading.value = false
+  }
+}
+
+/** 使用当前预览的明确批次提交卖出，避免确认时重新选择批次。 */
+async function submit() {
+  if (!canSubmit.value || !preview.value || !previewInput.value) {
+    ElMessage.warning('卖出输入已变化，请重新预览')
+    return
+  }
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    await api.sell({
+      accountId: previewInput.value.accountId,
+      securityId: previewInput.value.securityId,
+      qty: preview.value.qty,
+      price: preview.value.price,
+      executedAt: preview.value.executedAt,
+      clientRequestId: crypto.randomUUID(),
+      matches: preview.value.matches.map((match) => ({ lotId: match.lotId, matchedQty: match.matchedQty })),
+    })
+    ElMessage.success('卖出已记账')
+    visible.value = false
+    emit('saved')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '卖出失败')
+  } finally {
+    submitting.value = false
+  }
+}
 </script>
 <template>
-  <el-drawer v-model="visible" :title="`卖出配对工作台（${currency ?? 'CNY'}）`" size="520px"><el-form label-width="86px"><el-form-item label="卖出数量"><el-input v-model="form.qty" /></el-form-item><el-form-item label="卖出价格"><el-input v-model="form.price" /></el-form-item><el-form-item label="成交时间"><el-date-picker v-model="form.executedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item></el-form><el-button type="primary" :loading="loading" @click="previewSell">预览 FIFO 配对</el-button><el-divider /><div v-if="preview" class="preview"><p>预计净回款 <strong>{{ preview.cashIn }}</strong> · 已实现收益 <strong>{{ preview.realizedPnl }}</strong></p><el-table :data="matches" size="small"><el-table-column prop="lotId" label="批次" /><el-table-column prop="matchedQty" label="配对股数" /><el-table-column prop="allocatedBuyCost" label="分摊成本" /></el-table></div><template #footer><el-button @click="visible = false">取消</el-button><el-button type="danger" :loading="submitting" :disabled="!preview" @click="submit">确认卖出</el-button></template></el-drawer>
+  <el-drawer v-model="visible" :title="`卖出配对工作台（${previewCurrency ?? currency ?? '币种未知'}）`" size="min(760px, 96vw)">
+    <el-form class="sell-form" label-width="86px">
+      <el-form-item label="卖出数量"><el-input v-model="form.qty" inputmode="decimal" /></el-form-item>
+      <el-form-item label="卖出价格"><el-input v-model="form.price" inputmode="decimal" /></el-form-item>
+      <el-form-item label="成交时间"><el-date-picker v-model="form.executedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
+    </el-form>
+    <el-button type="primary" :loading="loading" @click="previewSell">预览最近买入优先</el-button>
+    <el-divider />
+    <div v-if="preview" class="preview">
+      <div class="preview-summary">
+        <div><span class="preview-label">预计净回款</span><strong>{{ formatMoney(preview.cashIn, previewCurrency) }}</strong></div>
+        <div><span class="preview-label">已实现收益</span><strong :class="trendClass(preview.realizedPnl)">{{ formatMoney(preview.realizedPnl, previewCurrency) }}</strong></div>
+        <div><span class="preview-label">预览成交量</span><strong>{{ formatDecimal(preview.qty, 4) }}</strong></div>
+      </div>
+      <el-table :data="preview.matches" row-key="lotId" size="small" class="match-table">
+        <el-table-column label="买入时间" min-width="170">
+          <template #default="{ row }"><strong class="match-primary">{{ formatDateTime(row.buyExecutedAt) }}</strong></template>
+        </el-table-column>
+        <el-table-column label="原始成交价" min-width="135">
+          <template #default="{ row }"><strong class="match-primary">{{ formatMoney(row.buyPrice, previewCurrency) }}</strong><div class="match-secondary">{{ previewCurrency ?? '币种未知' }}</div></template>
+        </el-table-column>
+        <el-table-column label="本次配对数量" min-width="230">
+          <template #default="{ row }">
+            <strong class="match-primary">{{ formatDecimal(row.matchedQty, 4) }}</strong>
+            <div class="match-secondary">原始买入 {{ formatDecimal(row.buyQty, 4) }} · 预览前可用 {{ formatDecimal(row.availableQty, 4) }}</div>
+            <div class="match-secondary">批次 <span class="lot-code" :title="row.lotId">{{ shortLotId(row.lotId) }}</span></div>
+          </template>
+        </el-table-column>
+        <el-table-column label="分摊成本" min-width="120">
+          <template #default="{ row }">{{ formatMoney(row.allocatedBuyCost, previewCurrency) }}</template>
+        </el-table-column>
+      </el-table>
+    </div>
+    <div v-else class="preview-placeholder muted">尚无有效预览</div>
+    <template #footer>
+      <el-button @click="visible = false">取消</el-button>
+      <el-button type="danger" :loading="submitting" :disabled="!canSubmit" @click="submit">确认卖出</el-button>
+    </template>
+  </el-drawer>
 </template>
+<style scoped>
+.sell-form { max-width: 520px; }
+.sell-form :deep(.el-date-editor) { width: 100%; }
+.preview-summary { display: flex; flex-wrap: wrap; gap: 20px 36px; padding: 14px 0; border-top: 1px solid var(--el-border-color-lighter); border-bottom: 1px solid var(--el-border-color-lighter); }
+.preview-summary > div { display: flex; min-width: 140px; flex-direction: column; gap: 4px; }
+.preview-label, .match-secondary { color: var(--el-text-color-secondary); font-size: 12px; }
+.match-primary { color: var(--el-text-color-primary); }
+.match-table { margin-top: 16px; }
+.lot-code { border-bottom: 1px dotted currentColor; cursor: help; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.preview-placeholder { padding: 28px 0; text-align: center; }
+@media (max-width: 600px) {
+  .preview-summary { gap: 12px 20px; }
+  .preview-summary > div { min-width: 120px; }
+}
+</style>

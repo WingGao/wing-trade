@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"复核预览提交一致性、类型、构建和端到端验证。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"复核组件只显示后端结果及旧预览失效。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"复核真实成交价和精确字符串契约。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"复核匹配守恒、FIFO 兼容、审计与幂等。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"运行匹配及 API 回归并核对边界。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"复核数量不足、未来批次及非法策略错误。"}

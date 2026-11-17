@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from datetime import datetime, timezone
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.domain.enums import MatchingMethod
 from app.domain.exceptions import (
     FutureLotError,
     InsufficientLotQtyError,
+    InvalidQuantityError,
     LotOwnershipError,
     MatchQuantityMismatchError,
-    InvalidQuantityError,
+    ValidationError,
 )
 from app.domain.models import MatchAllocation, MatchRequest
 from app.domain.precision import round_amount, round_qty
@@ -24,26 +25,93 @@ def _value(obj: object, name: str, default: object | None = None) -> object | No
 
 
 def _as_utc(value: datetime) -> datetime:
+    """将时间统一转换为 UTC，兼容 SQLite 返回的无时区值。"""
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _lot_sort_key(lot: object) -> tuple[datetime, datetime, str]:
+    """生成买入批次在自动配对中的确定性排序键。"""
+    executed_at = _value(lot, "executed_at")
+    created_at = _value(lot, "created_at")
+    missing_time = datetime.min.replace(tzinfo=UTC)
+    return (
+        _as_utc(executed_at) if isinstance(executed_at, datetime) else missing_time,
+        _as_utc(created_at) if isinstance(created_at, datetime) else missing_time,
+        str(_value(lot, "id", "")),
+    )
 
 
 class MatchingService:
-    """FIFO preview and deterministic buy/sell allocation."""
+    """提供自动配对预览和确定性的买卖分摊。"""
 
     @staticmethod
-    def fifo_preview(lots: Sequence[object], sell_qty: object) -> list[MatchRequest]:
+    def _eligible_lots(
+        lots: Sequence[object],
+        *,
+        sell_executed_at: datetime | None = None,
+        account_id: str | None = None,
+        security_id: str | None = None,
+        strategy_id: str | None = None,
+    ) -> list[object]:
+        """过滤可参与自动配对的批次，排除范围、状态和时间不符的数据。"""
+        sell_at = _as_utc(sell_executed_at) if sell_executed_at is not None else None
+        eligible: list[object] = []
+        for lot in lots:
+            if round_qty(_value(lot, "remaining_qty", 0)) <= 0:
+                continue
+            if str(_value(lot, "status", "OPEN")) != "OPEN":
+                continue
+            if account_id is not None and _value(lot, "account_id") != account_id:
+                continue
+            if security_id is not None and _value(lot, "security_id") != security_id:
+                continue
+            if strategy_id is not None and _value(lot, "strategy_id") != strategy_id:
+                continue
+            lot_executed_at = _value(lot, "executed_at")
+            if (
+                sell_at is not None
+                and isinstance(lot_executed_at, datetime)
+                and _as_utc(lot_executed_at) > sell_at
+            ):
+                continue
+            eligible.append(lot)
+        return eligible
+
+    @classmethod
+    def auto_preview(
+        cls,
+        lots: Sequence[object],
+        sell_qty: object,
+        *,
+        method: MatchingMethod | str = MatchingMethod.FIFO,
+        sell_executed_at: datetime | None = None,
+        account_id: str | None = None,
+        security_id: str | None = None,
+        strategy_id: str | None = None,
+    ) -> list[MatchRequest]:
+        """按指定自动策略生成完整卖出量对应的批次请求。"""
         quantity = round_qty(sell_qty)
         if quantity <= 0:
             raise InvalidQuantityError("sell quantity must be positive")
+        try:
+            matching_method = MatchingMethod(method)
+        except ValueError as exc:
+            raise ValidationError("matching method must be FIFO or LIFO") from exc
+        if matching_method not in {MatchingMethod.FIFO, MatchingMethod.LIFO}:
+            raise ValidationError("automatic matching requires FIFO or LIFO")
+        eligible = cls._eligible_lots(
+            lots,
+            sell_executed_at=sell_executed_at,
+            account_id=account_id,
+            security_id=security_id,
+            strategy_id=strategy_id,
+        )
         ordered = sorted(
-            (lot for lot in lots if round_qty(_value(lot, "remaining_qty", 0)) > 0),
-            key=lambda lot: (
-                _value(lot, "executed_at"),
-                _value(lot, "created_at") or datetime.min.replace(tzinfo=timezone.utc),
-                str(_value(lot, "id", "")),
-            ),
+            eligible,
+            key=_lot_sort_key,
+            reverse=matching_method == MatchingMethod.LIFO,
         )
         result: list[MatchRequest] = []
         left = quantity
@@ -61,24 +129,65 @@ class MatchingService:
             )
         return result
 
+    @classmethod
+    def fifo_preview(
+        cls,
+        lots: Sequence[object],
+        sell_qty: object,
+        *,
+        sell_executed_at: datetime | None = None,
+    ) -> list[MatchRequest]:
+        """保留最早买入优先的兼容入口。"""
+        return cls.auto_preview(
+            lots,
+            sell_qty,
+            method=MatchingMethod.FIFO,
+            sell_executed_at=sell_executed_at,
+        )
+
+    @classmethod
+    def lifo_preview(
+        cls,
+        lots: Sequence[object],
+        sell_qty: object,
+        *,
+        sell_executed_at: datetime | None = None,
+    ) -> list[MatchRequest]:
+        """按买入时间、创建时间和编号从新到旧生成配对请求。"""
+        return cls.auto_preview(
+            lots,
+            sell_qty,
+            method=MatchingMethod.LIFO,
+            sell_executed_at=sell_executed_at,
+        )
+
     preview_fifo = fifo_preview
+    preview_lifo = lifo_preview
 
     @staticmethod
-    def normalize_requests(requests: Iterable[MatchRequest | dict[str, object] | tuple[str, object]]) -> list[MatchRequest]:
+    def normalize_requests(
+        requests: Iterable[MatchRequest | dict[str, object] | tuple[str, object]],
+    ) -> list[MatchRequest]:
+        """将多种批次请求格式统一为四舍五入后的领域对象。"""
         normalized: list[MatchRequest] = []
         for request in requests:
             if isinstance(request, MatchRequest):
                 normalized.append(request)
             elif isinstance(request, dict):
-                normalized.append(MatchRequest(str(request["lot_id"]), request.get("matched_qty", request.get("qty"))))
+                normalized.append(
+                    MatchRequest(
+                        str(request["lot_id"]),
+                        round_qty(request.get("matched_qty", request.get("qty"))),
+                    )
+                )
             else:
-                normalized.append(MatchRequest(str(request[0]), request[1]))
+                normalized.append(MatchRequest(str(request[0]), round_qty(request[1])))
         return normalized
 
     @classmethod
     def validate_manual_matches(
         cls,
-        lots_by_id: dict[str, object],
+        lots_by_id: Mapping[str, object],
         requests: Iterable[MatchRequest | dict[str, object] | tuple[str, object]],
         *,
         sell_qty: object,
@@ -130,15 +239,27 @@ class MatchingService:
     @classmethod
     def allocate(
         cls,
-        lots_by_id: dict[str, object],
+        lots_by_id: Mapping[str, object],
         requests: Iterable[MatchRequest | dict[str, object] | tuple[str, object]],
         *,
         sell_qty: object,
         sell_cash_in: object,
         method: MatchingMethod = MatchingMethod.MANUAL,
-        **scope: object,
+        account_id: str | None = None,
+        security_id: str | None = None,
+        strategy_id: str | None = None,
+        sell_executed_at: datetime | None = None,
     ) -> list[MatchAllocation]:
-        normalized = cls.validate_manual_matches(lots_by_id, requests, sell_qty=sell_qty, **scope)
+        """校验明确批次并按原始剩余成本计算逐批分摊。"""
+        normalized = cls.validate_manual_matches(
+            lots_by_id,
+            requests,
+            sell_qty=sell_qty,
+            account_id=account_id,
+            security_id=security_id,
+            strategy_id=strategy_id,
+            sell_executed_at=sell_executed_at,
+        )
         total_qty = round_qty(sell_qty)
         cash_in = round_amount(sell_cash_in)
         allocations: list[MatchAllocation] = []
@@ -155,7 +276,9 @@ class MatchingService:
             if index == len(normalized) - 1:
                 sell_net = round_amount(cash_in - allocated_net)
             else:
-                sell_net = AccountingService.allocate_sell_net(cash_in, total_qty, request.matched_qty)
+                sell_net = AccountingService.allocate_sell_net(
+                    cash_in, total_qty, request.matched_qty
+                )
             allocated_net = round_amount(allocated_net + sell_net)
             new_qty = round_qty(remaining_qty - request.matched_qty)
             new_cost = round_amount(remaining_cost - cost)

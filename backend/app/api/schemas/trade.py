@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
+from app.domain.enums import MatchingMethod
+
 from .common import APIModel
 
 
@@ -36,6 +38,7 @@ class MatchRequestRead(APIModel):
 
 class SellPreviewRequest(BuyTradeRequest):
     matches: list[MatchRequestRead] | None = None
+    matching_method: MatchingMethod | None = None
 
 
 class SellTradeRequest(SellPreviewRequest):

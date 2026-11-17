@@ -1,5 +1,7 @@
 export type Currency = 'CNY' | 'USD'
 
+export type MatchingMethod = 'FIFO' | 'LIFO' | 'MANUAL'
+
 export type DashboardMode = 'cache' | 'auto' | 'manual'
 
 export type ValuationStatus = 'fresh' | 'stale' | 'partial' | 'unavailable' | 'empty'
@@ -143,14 +145,30 @@ export interface DashboardRead {
   quotes: Quote[]
 }
 
+export interface SellPreviewMatch {
+  lotId: string
+  buyTradeId: string
+  buyExecutedAt: string
+  buyPrice: string
+  buyQty: string
+  availableQty: string
+  matchedQty: string
+  allocatedBuyCost: string
+  allocatedSellNet: string
+  realizedPnl: string
+  matchingMethod: MatchingMethod
+}
+
 export interface SellPreview {
+  currency: Currency
+  executedAt: string
   qty: string
   price: string
   grossAmount: string
   feesTotal: string
   cashIn: string
   realizedPnl: string
-  matches: Array<{ lotId: string; matchedQty: string; allocatedBuyCost: string; realizedPnl: string }>
+  matches: SellPreviewMatch[]
 }
 
 export interface ApiError {

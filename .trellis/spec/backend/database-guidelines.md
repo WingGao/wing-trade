@@ -24,8 +24,12 @@ change must remain auditable.
 - `trades.client_request_id` is unique per account for idempotent submissions.
 - Buy cash out is `round_4(price * qty) + fees`; sell cash in is
   `round_4(price * qty) - fees`.
-- FIFO ordering is `(executed_at, created_at, id)`; manual matches must total the
-  sell quantity and belong to the same account/security/strategy.
+- Automatic matching is deterministic by `(executed_at, created_at, id)`: FIFO
+  uses ascending order, LIFO uses descending order, and an omitted strategy
+  remains FIFO. Automatic candidates must be OPEN, have positive remaining
+  quantity, match the sell scope, and be bought no later than the sell.
+- Manual matches must total the sell quantity and belong to the same
+  account/security/strategy.
 - A final match consumes the lot's current remaining cost; partial matches use
   `round_4(original_cost * matched_qty / original_qty)`. Sell-net tail rounding
   goes to the final match.

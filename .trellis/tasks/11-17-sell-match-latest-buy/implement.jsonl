@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"沿用现有 Vue 与 Element Plus 组件和可访问标签。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"预览状态保留精确字符串，匹配计算归后端。"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"API 预览明细集中定义并通过严格类型检查。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"保持先预览后确认及核心交易回归。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"保留匹配范围、十进制分摊、审计与事务约束。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"沿用数量不足和时间先后错误契约。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"新增匹配规则必须有确定性和边界测试。"}

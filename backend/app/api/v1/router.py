@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -22,6 +22,7 @@ from app.api.schemas.security import SecurityCreate, WatchlistItemCreate
 from app.api.schemas.target import ProfitTargetCreate, ProfitTargetPatch
 from app.api.schemas.trade import (
     BuyTradeRequest,
+    MatchRequestRead,
     SellPreviewRequest,
     SellTradeRequest,
     VoidTradeRequest,
@@ -79,6 +80,18 @@ def _fmt(value: Decimal | None, scale: int = 4) -> str | None:
 
 def _dt(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _dt_utc(value: datetime | None) -> str | None:
+    """将 SQLite 可能缺失时区的时间按 UTC 序列化。"""
+    if value is None:
+        return None
+    normalized = (
+        value.replace(tzinfo=UTC)
+        if value.tzinfo is None
+        else value.astimezone(UTC)
+    )
+    return normalized.isoformat()
 
 
 def trade_data(trade: Trade) -> dict[str, Any]:
@@ -295,41 +308,149 @@ def record_buy(payload: BuyTradeRequest, actor: str | None = Depends(request_act
         raise
 
 
-def _preview_allocations(session: Session, payload: SellPreviewRequest) -> tuple[None, list[dict[str, Any]]]:
-    account, strategy = _resolve_trade_scope(session, payload.account_id, payload.strategy_id, payload.security_id)
+def _requested_match(item: MatchRequestRead) -> MatchRequest:
+    """将 API 批次项转换为带必填数量的服务请求。"""
+    matched_qty = item.matched_qty if item.matched_qty is not None else item.qty
+    if matched_qty is None:
+        raise ValidationError("matched quantity is required", details={"lot_id": item.lot_id})
+    return MatchRequest(item.lot_id, matched_qty)
+
+
+def _preview_allocations(
+    session: Session,
+    payload: SellPreviewRequest,
+) -> tuple[str, list[dict[str, Any]]]:
+    """生成卖出预览批次，并附加关联买入交易的真实成交信息。"""
+    account, strategy = _resolve_trade_scope(
+        session, payload.account_id, payload.strategy_id, payload.security_id
+    )
+    account_record = session.get(Account, account)
+    if account_record is None:
+        raise EntityNotFoundError("account was not found", details={"account_id": account})
+    account_currency = account_record.currency
     cycle = CycleService.get_open_cycle(session, account, payload.security_id, strategy)
     if cycle is None:
         raise ValidationError("cannot sell without an open cycle")
-    lots = [lot for lot in session.scalars(select(Lot).where(Lot.cycle_id == cycle.id, Lot.status == "OPEN")) if lot.remaining_qty > 0]
+    cycle_lots = session.scalars(
+        select(Lot).where(Lot.cycle_id == cycle.id, Lot.status == "OPEN")
+    )
+    lots = [lot for lot in cycle_lots if lot.remaining_qty > 0]
+    lots_by_id = {lot.id: lot for lot in lots}
     calculation = AccountingService.calculate_sell(payload.qty, payload.price, fees_from(payload))
     if payload.matches is None:
-        requests = MatchingService.fifo_preview(lots, calculation.qty)
-        method = MatchingMethod.FIFO
+        method = payload.matching_method or MatchingMethod.FIFO
+        requests = MatchingService.auto_preview(
+            lots,
+            calculation.qty,
+            method=method,
+            sell_executed_at=payload.executed_at,
+            account_id=account,
+            security_id=payload.security_id,
+            strategy_id=strategy,
+        )
     else:
-        requests = [MatchRequest(item.lot_id, item.matched_qty if item.matched_qty is not None else item.qty) for item in payload.matches]
+        requests = [_requested_match(item) for item in payload.matches]
         method = MatchingMethod.MANUAL
-    copies = {lot.id: SimpleNamespace(id=lot.id, account_id=lot.account_id, security_id=lot.security_id, strategy_id=lot.strategy_id, executed_at=lot.executed_at, created_at=lot.created_at, original_qty=lot.original_qty, original_cost=lot.original_cost, remaining_qty=lot.remaining_qty, remaining_cost=lot.remaining_cost) for lot in lots}
-    allocations = MatchingService.allocate(copies, requests, sell_qty=calculation.qty, sell_cash_in=calculation.cash_in, method=method, account_id=account, security_id=payload.security_id, strategy_id=strategy, sell_executed_at=payload.executed_at)
-    return (
-        None,
-        [{"lotId": item.lot_id, "matchedQty": _fmt(item.matched_qty), "allocatedBuyCost": _fmt(item.allocated_buy_cost), "allocatedSellNet": _fmt(item.allocated_sell_net), "realizedPnl": _fmt(item.realized_pnl), "matchingMethod": item.method.value} for item in allocations],
+    copies: dict[str, object] = {
+        lot.id: SimpleNamespace(
+            id=lot.id,
+            account_id=lot.account_id,
+            security_id=lot.security_id,
+            strategy_id=lot.strategy_id,
+            executed_at=lot.executed_at,
+            created_at=lot.created_at,
+            original_qty=lot.original_qty,
+            original_cost=lot.original_cost,
+            remaining_qty=lot.remaining_qty,
+            remaining_cost=lot.remaining_cost,
+        )
+        for lot in lots
+    }
+    allocations = MatchingService.allocate(
+        copies,
+        requests,
+        sell_qty=calculation.qty,
+        sell_cash_in=calculation.cash_in,
+        method=method,
+        account_id=account,
+        security_id=payload.security_id,
+        strategy_id=strategy,
+        sell_executed_at=payload.executed_at,
     )
+    matches: list[dict[str, Any]] = []
+    for item in allocations:
+        lot = lots_by_id[item.lot_id]
+        buy_trade = lot.buy_trade
+        matches.append(
+            {
+                "lotId": item.lot_id,
+                "buyTradeId": lot.buy_trade_id,
+                "buyExecutedAt": _dt_utc(buy_trade.executed_at),
+                "buyPrice": _fmt(buy_trade.price, 6),
+                "buyQty": _fmt(buy_trade.qty),
+                "availableQty": _fmt(lot.remaining_qty),
+                "matchedQty": _fmt(item.matched_qty),
+                "allocatedBuyCost": _fmt(item.allocated_buy_cost),
+                "allocatedSellNet": _fmt(item.allocated_sell_net),
+                "realizedPnl": _fmt(item.realized_pnl),
+                "matchingMethod": item.method.value,
+            }
+        )
+    return account_currency, matches
 
 
 @router.post("/trades/sell/preview")
 def preview_sell(payload: SellPreviewRequest, session: Session = Depends(get_db)) -> dict[str, Any]:
-    _, allocations = _preview_allocations(session, payload)
+    """返回卖出金额、真实买入批次及服务端计算的分摊结果。"""
+    currency, allocations = _preview_allocations(session, payload)
     calculation = AccountingService.calculate_sell(payload.qty, payload.price, fees_from(payload))
-    return {"qty": _fmt(calculation.qty), "price": _fmt(calculation.price, 6), "grossAmount": _fmt(calculation.gross), "feesTotal": _fmt(calculation.fees.total), "cashIn": _fmt(calculation.cash_in), "matches": allocations, "realizedPnl": _fmt(sum((Decimal(item["realizedPnl"]) for item in allocations), Decimal("0")))}
+    realized_pnl = sum(
+        (Decimal(item["realizedPnl"]) for item in allocations),
+        Decimal("0"),
+    )
+    return {
+        "currency": currency,
+        "executedAt": _dt_utc(payload.executed_at),
+        "qty": _fmt(calculation.qty),
+        "price": _fmt(calculation.price, 6),
+        "grossAmount": _fmt(calculation.gross),
+        "feesTotal": _fmt(calculation.fees.total),
+        "cashIn": _fmt(calculation.cash_in),
+        "matches": allocations,
+        "realizedPnl": _fmt(realized_pnl),
+    }
 
 
 @router.post("/trades/sell", status_code=status.HTTP_201_CREATED)
 def record_sell(payload: SellTradeRequest, actor: str | None = Depends(request_actor), session: Session = Depends(get_db)) -> dict[str, Any]:
+    """确认卖出并按明确批次或指定自动策略更新账务。"""
     begin_write(session)
     try:
-        account, strategy = _resolve_trade_scope(session, payload.account_id, payload.strategy_id, payload.security_id)
-        matches = None if payload.matches is None else [MatchRequest(item.lot_id, item.matched_qty if item.matched_qty is not None else item.qty) for item in payload.matches]
-        trade = TradeLedgerService(session, actor=actor).sell(account_id=account, security_id=payload.security_id, strategy_id=strategy, executed_at=payload.executed_at, qty=payload.qty, price=payload.price, matches=matches, fees=fees_from(payload), client_request_id=payload.client_request_id, source=payload.source, external_trade_id=payload.external_trade_id, import_batch_id=payload.import_batch_id, memo=payload.memo, commit=False)
+        account, strategy = _resolve_trade_scope(
+            session, payload.account_id, payload.strategy_id, payload.security_id
+        )
+        matches = (
+            None
+            if payload.matches is None
+            else [_requested_match(item) for item in payload.matches]
+        )
+        trade = TradeLedgerService(session, actor=actor).sell(
+            account_id=account,
+            security_id=payload.security_id,
+            strategy_id=strategy,
+            executed_at=payload.executed_at,
+            qty=payload.qty,
+            price=payload.price,
+            matches=matches,
+            matching_method=payload.matching_method or MatchingMethod.FIFO,
+            fees=fees_from(payload),
+            client_request_id=payload.client_request_id,
+            source=payload.source,
+            external_trade_id=payload.external_trade_id,
+            import_batch_id=payload.import_batch_id,
+            memo=payload.memo,
+            commit=False,
+        )
         finish_write(session, True)
         return {**trade_data(trade), "matches": [match_data(match) for match in trade.matches]}
     except Exception:

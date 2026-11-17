@@ -48,5 +48,6 @@ class CalcBasis(_ValueEnum):
 
 class MatchingMethod(_ValueEnum):
     FIFO = "FIFO"
+    LIFO = "LIFO"
     MANUAL = "MANUAL"
 

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import type { DashboardPosition, DashboardRead, DashboardSummary, Quote, Trade } from '../src/api/types'
+import type { DashboardPosition, DashboardRead, DashboardSummary, Quote, SellPreview, Trade } from '../src/api/types'
 
 const asOf = '2026-11-16T06:30:00Z'
 const sourceTime = '2026-11-16T06:29:58Z'
@@ -100,6 +100,35 @@ function makeTrade(): Trade {
     grossAmount: '1000.0000',
     feesTotal: '0.0000',
     status: 'ACTIVE',
+  }
+}
+
+/** 构造包含真实买入字段的卖出预览响应。 */
+function makeSellPreview(qty: string): SellPreview {
+  return {
+    currency: 'CNY',
+    executedAt: '2026-11-05T02:00:00.000Z',
+    qty: `${qty}.0000`,
+    price: '30.000000',
+    grossAmount: `${Number(qty) * 30}.0000`,
+    feesTotal: '0.0000',
+    cashIn: `${Number(qty) * 30}.0000`,
+    realizedPnl: '52.0000',
+    matches: [
+      {
+        lotId: 'lot-newer-1234567890',
+        buyTradeId: 'trade-newer-1234567890',
+        buyExecutedAt: '2026-11-02T01:00:00.000Z',
+        buyPrice: '20.000000',
+        buyQty: '10.0000',
+        availableQty: '10.0000',
+        matchedQty: `${qty}.0000`,
+        allocatedBuyCost: '82.0000',
+        allocatedSellNet: `${Number(qty) * 30}.0000`,
+        realizedPnl: '52.0000',
+        matchingMethod: 'LIFO',
+      },
+    ],
   }
 }
 
@@ -258,6 +287,79 @@ test.describe('portfolio journal dashboard', () => {
 
     await expect.poll(() => dashboardCalls.length).toBeGreaterThan(countBeforeBuy)
     expect(dashboardCalls.at(-1)).toEqual({ mode: 'auto', includeClosed: true })
+  })
+
+  /** 验证最近买入详情、输入失效和旧预览响应隔离。 */
+  test('previews LIFO buy details and submits only the current preview', async ({ page }) => {
+    const previewBodies: Array<{ qty: string; matchingMethod?: string }> = []
+    const sellBodies: Array<{ qty: string; matches: Array<{ lotId: string; matchedQty: string }> }> = []
+    let sold = false
+    let releaseSlowPreview = () => {}
+    const slowPreview = new Promise<void>((resolve) => { releaseSlowPreview = resolve })
+    await mockAccounts(page)
+    await page.route('**/api/v1/dashboard**', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(sold
+        ? makeDashboard({ positions: [makePosition({ remainingQty: '6.0000', realizedPnl: '52.0000' })], summary: makeSummary({ realizedPnl: '52.0000', remainingQty: '6.0000' }) })
+        : makeDashboard({ positions: [], quotes: [], summary: makeSummary({ valuationStatus: 'empty', totalOpenPositions: 0, quotedOpenPositions: 0, unrealizedPnl: '0.0000', unrealizedReturnPct: null }) })),
+    }))
+    await page.route('**/api/v1/securities?query=600519', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 'security-1', market: 'SH', symbol: '600519', name: '贵州茅台', currency: 'CNY' }]) }))
+    await page.route('**/api/v1/securities/security-1/lots**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ lots: [{ id: 'lot-newer-1234567890', status: 'OPEN' }], closedLotCount: 0, realizedPnl: '0.0000' }) }))
+    await page.route('**/api/v1/trades/sell/preview', async (route) => {
+      const payload = route.request().postDataJSON() as { qty: string; matchingMethod?: string }
+      previewBodies.push(payload)
+      if (payload.qty === '3') await slowPreview
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(makeSellPreview(payload.qty)) })
+    })
+    await page.route('**/api/v1/trades/sell', (route) => {
+      sellBodies.push(route.request().postDataJSON())
+      sold = true
+      return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ ...makeTrade(), side: 'SELL' }) })
+    })
+
+    await page.goto('/dashboard')
+    await page.getByPlaceholder('输入证券代码、名称，例如 600519').fill('600519')
+    await page.getByRole('button', { name: '查找证券' }).click()
+    await page.getByRole('button', { name: /SH:600519/ }).click()
+    await expect(page.getByRole('button', { name: '卖出配对' })).toBeEnabled()
+    await page.getByRole('button', { name: '卖出配对' }).click()
+    const drawer = page.getByRole('dialog', { name: /卖出配对工作台/ })
+    const inputs = drawer.locator('input')
+    await inputs.nth(0).fill('2')
+    await inputs.nth(1).fill('30')
+    await drawer.getByRole('button', { name: '预览最近买入优先' }).click()
+
+    await expect.poll(() => previewBodies.length).toBe(1)
+    expect(previewBodies[0]?.matchingMethod).toBe('LIFO')
+    const row = drawer.locator('.el-table__row')
+    await expect(row).toContainText('原始买入 10.0000 · 预览前可用 10.0000')
+    await expect(row).toContainText('¥ 20.00')
+    await expect(row).toContainText('lot-newe')
+    await expect(row.locator('.lot-code')).toHaveAttribute('title', 'lot-newer-1234567890')
+
+    await inputs.nth(0).fill('3')
+    const confirm = drawer.getByRole('button', { name: '确认卖出' })
+    await expect(confirm).toBeDisabled()
+    await expect(drawer.getByText('尚无有效预览')).toBeVisible()
+    await drawer.getByRole('button', { name: '预览最近买入优先' }).click()
+    await expect.poll(() => previewBodies.length).toBe(2)
+    await inputs.nth(0).fill('4')
+    await expect(confirm).toBeDisabled()
+    await drawer.getByRole('button', { name: '预览最近买入优先' }).click()
+    await expect.poll(() => previewBodies.length).toBe(3)
+    await expect(row).toContainText('4.00')
+
+    const slowResponse = page.waitForResponse((response) => response.url().includes('/trades/sell/preview') && response.request().postDataJSON().qty === '3')
+    releaseSlowPreview()
+    await slowResponse
+    await expect(confirm).toBeEnabled()
+    await expect(row).toContainText('4.00')
+    await confirm.click()
+    await expect.poll(() => sellBodies.length).toBe(1)
+    expect(sellBodies[0]).toMatchObject({ qty: '4.0000', matches: [{ lotId: 'lot-newer-1234567890', matchedQty: '4.0000' }] })
+    const positionRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SH:600519' })
+    await expect(positionRow).toContainText('6.0000')
   })
 
   test('distinguishes zero, stale and unavailable values without showing a partial total', async ({ page }) => {

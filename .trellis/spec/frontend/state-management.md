@@ -89,3 +89,63 @@ quotes.value = await api.quotes()
 const snapshot = await api.dashboard(accountId, includeClosed, mode)
 dashboard.value = snapshot
 ```
+
+## Scenario: 卖出预览失效与确认一致性
+
+### 1. Scope / Trigger
+
+- 触发条件：修改卖出配对工作台、预览请求状态，或预览到正式卖出的提交契约。
+- 工作台只展示后端配对结果；输入对象变化后必须重新预览，旧异步响应不能恢复确认能力。
+
+### 2. Signatures
+
+- `api.previewSell(payload)` 请求可包含 `matchingMethod: LIFO`。
+- `SellPreview` 包含 `currency`、`executedAt`、金额字段和 `SellPreviewMatch[]`。
+- `SellPreviewMatch` 包含真实买入信息、可用数量、本次配对数量和服务端分摊结果。
+
+### 3. Contracts
+
+- 当前工作台显式请求 `LIFO`；账户、证券、数量、价格或成交时间变化后立即清空预览并推进请求代次。
+- 响应只有在代次仍为当前代次时才能写入；失败或过期响应不得重新启用“确认卖出”。
+- 确认按钮仅在存在预览、预览输入快照与当前输入完全一致且没有预览请求在途时启用。
+- 提交使用预览响应的标准化数量、价格、成交时间及明确批次；按钮标签和展示文案不得再写 FIFO。
+- 主要展示买入时间、原始成交价和本次配对数量；原始数量、预览前可用数量与短批次号作为辅助信息，完整编号保留在提示中。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 必须结果 |
+|---|---|
+| 数量、价格或成交时间无效 | 阻止请求并给出提示 |
+| 输入在请求期间变化 | 旧预览清空，旧响应被忽略 |
+| 预览失败 | 保持无预览状态，确认按钮禁用 |
+| 账户或证券切换 | 旧预览失效并提升请求代次 |
+| 预览成功但输入已变化 | 不展示旧结果，不启用确认 |
+
+### 5. Good / Base / Bad Cases
+
+- Good：先请求 6 股慢响应，再修改为 7 股并成功预览；6 股响应到达后页面仍保留 7 股预览。
+- Base：用户修改任一表单字段后，原确认按钮立即禁用并显示重新预览提示。
+- Bad：只用 `loading=false` 判断旧请求结束，导致旧响应覆盖新输入。
+
+### 6. Tests Required
+
+- E2E 断言请求包含 `matchingMethod=LIFO`，并展示买入时间、原始成交价、配对数量和可用数量。
+- E2E 制造两次乱序预览响应，断言旧响应不能覆盖新预览或启用确认。
+- E2E 断言确认请求携带当前预览的明确 `lotId` 与 `matchedQty`。
+- `pnpm run type-check`、`pnpm run build` 和相关 Playwright 用例必须通过。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+preview.value = await api.previewSell(payload)
+```
+
+#### Correct
+
+```ts
+const generation = ++previewGeneration
+const result = await api.previewSell(payload)
+if (generation === previewGeneration) preview.value = result
+```
