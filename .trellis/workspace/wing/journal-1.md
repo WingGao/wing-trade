@@ -227,3 +227,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: 卖出配对最近买入优先
+<!-- trellis-session: v=2 fp=a6f1a3e15951d950 -->
+
+**Date**: 2026-11-17
+**Task**: 卖出配对最近买入优先
+**Branch**: `11-16-dashboard-realtime-pnl`
+
+### Summary
+
+实现LIFO卖出配对和真实买入明细展示及竞态回归测试
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cc568da` | feat:sell-match-latest-buy |
+
+### Status
+
+[OK] **Completed**

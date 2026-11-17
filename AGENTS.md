@@ -24,3 +24,4 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 - 所有文档都应该使用中文
 - 所有方法必须要有注释
+- 本地 `ledger.db` 不允许删除和清空数据
