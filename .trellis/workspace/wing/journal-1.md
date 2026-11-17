@@ -249,3 +249,41 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: 完善持仓看板、批次明细与分级止盈
+<!-- trellis-session: v=2 fp=31be7723c1e09b5b -->
+
+**Date**: 2026-11-17
+**Task**: 完善持仓看板、批次明细与分级止盈
+**Branch**: `master`
+
+### Summary
+
+完成持仓市值、外部查名和日内图、等量配对与批次重建、三级止盈、结清买卖明细，用户评审后提交并归档。
+
+### Main Changes
+
+- 统一持仓估值与三位股价、整数股数，增加真实日内图和外部名称查找。
+- 实现等量卖出、事务重建及三级止盈只读继承，显示结清批次全部有效买卖和本批分摊。
+- 同步前后端规范与任务验收；归档原目录未跟踪导致自动提交失败，核对后单独补齐归档提交。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aa10418` | feat: 完善持仓看板、批次明细与分级止盈 |
+
+### Testing
+
+- [OK] 后端72项测试通过，mypy检查53个文件通过；迁移测试仅使用隔离临时库。
+- [OK] 前端类型检查、生产构建和18项端到端回归通过，已核对完整明细截图。
+- [OK] 本次新增文件和修改行Ruff无新增问题；全库保留164项历史问题；git diff --check通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 尚未推送或部署。部署前核对目标数据库及Alembic基线，迁移应先于新版后端启动；不自动接管用户账本。

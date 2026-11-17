@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-11-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~251 | Active |
+| `journal-1.md` | ~289 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-11-17 | 完善持仓看板、批次明细与分级止盈 | `aa10418` | `master` |
 | 10 | 2026-11-17 | 卖出配对最近买入优先 | `cc568da` | `11-16-dashboard-realtime-pnl` |
 | 9 | 2026-11-16 | Dashboard-A股实时行情与浮盈 | `be58bf6` | `11-16-dashboard-realtime-pnl` |
 | 8 | 2026-11-06 | US equity support implementation | `b06f983` | `master` |
