@@ -1,0 +1,34 @@
+{
+  "id": "portfolio-lots-profit-targets",
+  "name": "portfolio-lots-profit-targets",
+  "title": "完善持仓看板、批次核算与分级止盈",
+  "description": "实现持仓市值、外部股票名称查询、日内行情图、批次浮盈与重建、等量卖出匹配和三级止盈继承，完成检查后等待提交前 review",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "wing",
+  "assignee": "wing",
+  "createdAt": "2026-11-17",
+  "completedAt": "2026-11-17",
+  "branch": "master",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": "aa10418ffdb2a93fa100477dd662925b5f8ee1b6",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "review_approved_at": "2026-11-17",
+    "validation": {
+      "backend_tests": 72,
+      "frontend_e2e": 18,
+      "mypy_files": 53,
+      "ruff_baseline_remaining": 164
+    }
+  }
+}

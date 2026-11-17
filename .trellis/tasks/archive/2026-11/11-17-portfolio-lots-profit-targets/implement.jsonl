@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Decimal、事务、审计及迁移约定"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"配对、预览确认和账务测试"}
+{"file":".trellis/spec/backend/market-data-guidelines.md","reason":"行情失败隔离与一致估值"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端接口与行情状态"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"轮询与过期响应控制"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"十进制字符串与共享 DTO"}
+{"file":".trellis/tasks/11-17-portfolio-lots-profit-targets/research/backend-findings.md","reason":"重建外键顺序、部分卖出盈亏与取消目标问题"}
+{"file":".trellis/tasks/11-17-portfolio-lots-profit-targets/research/external-market-findings.md","reason":"外部接口实测字段与美股北京时间序列"}
