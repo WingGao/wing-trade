@@ -132,3 +132,46 @@ def test_fifo_preview_remains_the_compatible_default() -> None:
     requests = MatchingService.auto_preview([newer, older], "1")
 
     assert requests[0].lot_id == "older"
+
+
+@pytest.mark.parametrize(
+    ("quantities", "sell_qty", "expected"),
+    [
+        (["10", "4"], "6", [("1", "3"), ("0", "3")]),
+        (["10", "4"], "10", [("1", "4"), ("0", "6")]),
+        (["4", "4", "4"], "10", [("2", "4"), ("1", "3"), ("0", "3")]),
+        (["10", "10"], "3", [("1", "3")]),
+        (["10", "1", "1"], "9", [("2", "1"), ("1", "1"), ("0", "7")]),
+        (["1.5000", "0.5000"], "1.0001", [("1", "0.5"), ("0", "0.5001")]),
+    ],
+)
+def test_equal_preview_conserves_quantity_with_capacity_and_integer_remainders(
+    quantities: list[str],
+    sell_qty: str,
+    expected: list[tuple[str, str]],
+) -> None:
+    """等量策略只选最少新批次，容量不足继续均分且不丢失整数余股或旧小数股。"""
+    lots = [
+        _lot(str(index), qty=qty, executed_at=datetime(2026, 11, index + 1, tzinfo=UTC))
+        for index, qty in enumerate(quantities)
+    ]
+    requests = MatchingService.auto_preview(lots, sell_qty, method="EQUAL")
+    assert [(item.lot_id, item.matched_qty) for item in requests] == [
+        (lot_id, Decimal(qty)) for lot_id, qty in expected
+    ]
+    assert sum((item.matched_qty for item in requests), Decimal("0")) == Decimal(sell_qty)
+
+
+def test_equal_preview_rejects_insufficient_and_future_lots() -> None:
+    """等量策略仍必须执行原有时间过滤和缺量校验。"""
+    lots = [
+        _lot("old", qty="2", executed_at=datetime(2026, 11, 1, tzinfo=UTC)),
+        _lot("future", qty="10", executed_at=datetime(2026, 11, 3, tzinfo=UTC)),
+    ]
+    with pytest.raises(InsufficientLotQtyError):
+        MatchingService.auto_preview(
+            lots,
+            "3",
+            method="EQUAL",
+            sell_executed_at=datetime(2026, 11, 2, tzinfo=UTC),
+        )

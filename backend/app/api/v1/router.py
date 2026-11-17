@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -7,7 +8,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.api.deps import (
     get_db,
@@ -19,7 +20,7 @@ from app.api.deps import (
 from app.api.schemas.account import AccountCreate
 from app.api.schemas.dashboard import DashboardRead
 from app.api.schemas.security import SecurityCreate, WatchlistItemCreate
-from app.api.schemas.target import ProfitTargetCreate, ProfitTargetPatch
+from app.api.schemas.target import ProfitSettingWrite, ProfitTargetCreate, ProfitTargetPatch
 from app.api.schemas.trade import (
     BuyTradeRequest,
     MatchRequestRead,
@@ -28,16 +29,18 @@ from app.api.schemas.trade import (
     VoidTradeRequest,
 )
 from app.api.utils import begin_write, fees_from, finish_write
+from app.api.v1.market import router as market_router
 from app.domain.enums import CalcBasis, MatchingMethod, TradeSide, TradeStatus
 from app.domain.exceptions import EntityNotFoundError, ValidationError
 from app.domain.markets import currency_for_market
 from app.domain.models import MatchRequest
-from app.domain.precision import round_amount, round_qty
+from app.domain.precision import round_amount, round_price, round_qty
 from app.market_data import QuoteCollector, create_quote_provider
 from app.models.ledger import (
     Account,
     Cycle,
     Lot,
+    ProfitSetting,
     ProfitTarget,
     QuoteCache,
     Security,
@@ -51,11 +54,14 @@ from app.services.cycle import CycleService
 from app.services.dashboard import DashboardService
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
+from app.services.profit_settings import ProfitSettingsService
+from app.services.recalculate import RecalculationService
 from app.services.target import TargetService
 
 quote_collector = QuoteCollector(create_quote_provider())
 
 router = APIRouter(prefix="/api/v1")
+router.include_router(market_router)
 
 
 def account_data(account: Account) -> dict[str, Any]:
@@ -95,11 +101,17 @@ def _dt_utc(value: datetime | None) -> str | None:
 
 
 def trade_data(trade: Trade) -> dict[str, Any]:
+    """序列化交易及证券资料，内部主键只供追溯使用。"""
+    session = object_session(trade)
+    security = session.get(Security, trade.security_id) if session is not None else None
     return {
         "id": trade.id,
         "accountId": trade.account_id,
         "currency": trade.account.currency if trade.account is not None else None,
         "securityId": trade.security_id,
+        "market": security.market if security is not None else None,
+        "symbol": security.symbol if security is not None else None,
+        "name": security.name if security is not None else None,
         "strategyId": trade.strategy_id,
         "cycleId": trade.cycle_id,
         "side": trade.side,
@@ -171,6 +183,58 @@ def lot_data(lot: Lot, *, include_targets: bool = True) -> dict[str, Any]:
     if include_targets:
         data["targets"] = [target_data(target) for target in lot.targets]
     return data
+
+
+def _closed_trade_details(lots: Sequence[Lot]) -> list[dict[str, Any]]:
+    """只读投影结清批次的真实买入与有效卖出，本批回款和数量使用匹配分摊。"""
+    details: list[dict[str, Any]] = []
+    for lot in lots:
+        buy = lot.buy_trade
+        scope = (lot.account_id, lot.security_id, lot.strategy_id)
+        if (
+            lot.status != "CLOSED"
+            or buy is None
+            or buy.status != TradeStatus.ACTIVE.value
+            or buy.side != TradeSide.BUY.value
+            or (buy.account_id, buy.security_id, buy.strategy_id) != scope
+        ):
+            continue
+        details.append({
+            "lotId": lot.id,
+            "tradeId": buy.id,
+            "side": "BUY",
+            "executedAt": _dt_utc(buy.executed_at),
+            "qty": _fmt(buy.qty),
+            "originalTradeQty": _fmt(buy.qty),
+            "price": _fmt(buy.price, 6),
+            "cashAmount": _fmt(round_amount(buy.gross_amount + buy.fees_total)),
+            "realizedPnl": None,
+        })
+        for match in lot.matches:
+            sell = match.sell_trade
+            if (
+                sell is None
+                or sell.status != TradeStatus.ACTIVE.value
+                or sell.side != TradeSide.SELL.value
+                or (sell.account_id, sell.security_id, sell.strategy_id) != scope
+            ):
+                continue
+            details.append({
+                "lotId": lot.id,
+                "tradeId": sell.id,
+                "side": "SELL",
+                "executedAt": _dt_utc(sell.executed_at),
+                "qty": _fmt(match.matched_qty),
+                "originalTradeQty": _fmt(sell.qty),
+                "price": _fmt(sell.price, 6),
+                "cashAmount": _fmt(match.allocated_sell_net),
+                "realizedPnl": _fmt(match.realized_pnl),
+            })
+    return sorted(
+        details,
+        key=lambda item: (item["executedAt"], item["tradeId"], item["lotId"], item["side"]),
+        reverse=True,
+    )
 
 
 def _security_or_404(session: Session, security_id: str) -> Security:
@@ -284,8 +348,16 @@ def _resolve_trade_scope(session: Session, account_id: str | None, strategy_id: 
 
 
 @router.get("/trades")
-def list_trades(account_id: str | None = Query(default=None, alias="accountId"), security_id: str | None = Query(default=None, alias="securityId"), include_voided: bool = Query(default=False, alias="includeVoided"), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    stmt = select(Trade).order_by(Trade.executed_at, Trade.created_at)
+def list_trades(
+    account_id: str | None = Query(default=None, alias="accountId"),
+    security_id: str | None = Query(default=None, alias="securityId"),
+    include_voided: bool = Query(default=False, alias="includeVoided"),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """按成交时间倒序返回流水，证券名称与代码随交易一并返回。"""
+    stmt = select(Trade).order_by(
+        Trade.executed_at.desc(), Trade.created_at.desc(), Trade.id.desc()
+    )
     if account_id:
         stmt = stmt.where(Trade.account_id == account_id)
     if security_id:
@@ -511,16 +583,93 @@ def list_positions(account_id: str | None = Query(default=None, alias="accountId
 
 
 @router.get("/securities/{security_id}/lots")
-def list_lots(security_id: str, account_id: str | None = Query(default=None, alias="accountId"), strategy_id: str | None = Query(default=None, alias="strategyId"), include_closed: bool = Query(default=False, alias="includeClosed"), session: Session = Depends(get_db)) -> dict[str, Any]:
+def list_lots(
+    security_id: str,
+    account_id: str | None = Query(default=None, alias="accountId"),
+    strategy_id: str | None = Query(default=None, alias="strategyId"),
+    include_closed: bool = Query(default=False, alias="includeClosed"),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """倒序返回批次估值；开启结清显示时附上全部有效闭仓买卖分摊明细。"""
     account = resolve_account(session, account_id)
     strategy = resolve_strategy(session, account, strategy_id)
-    stmt = select(Lot).where(Lot.account_id == account, Lot.security_id == security_id, Lot.strategy_id == strategy).order_by(Lot.executed_at, Lot.created_at)
+    security = _security_or_404(session, security_id)
+    stmt = (
+        select(Lot)
+        .where(
+            Lot.account_id == account, Lot.security_id == security_id, Lot.strategy_id == strategy
+        )
+        .order_by(Lot.executed_at.desc(), Lot.created_at.desc(), Lot.id.desc())
+    )
     if not include_closed:
         stmt = stmt.where(Lot.status == "OPEN")
     lots = list(session.scalars(stmt))
-    closed = list(session.scalars(select(Lot).where(Lot.account_id == account, Lot.security_id == security_id, Lot.strategy_id == strategy, Lot.status == "CLOSED")))
-    realized = round_amount(sum((m.realized_pnl for lot in closed for m in lot.matches if m.sell_trade is None or m.sell_trade.status == TradeStatus.ACTIVE.value), Decimal("0")))
-    return {"lots": [lot_data(lot) for lot in lots], "closedLotCount": len(closed), "realizedPnl": _fmt(realized)}
+    closed_stmt = select(Lot).where(
+        Lot.account_id == account,
+        Lot.security_id == security_id,
+        Lot.strategy_id == strategy,
+        Lot.status == "CLOSED",
+    )
+    if include_closed:
+        closed_stmt = closed_stmt.options(
+            selectinload(Lot.buy_trade),
+            selectinload(Lot.matches).selectinload(TradeMatch.sell_trade),
+        )
+    closed = list(session.scalars(closed_stmt))
+    active_matches = session.scalars(
+        select(TradeMatch)
+        .join(Lot, Lot.id == TradeMatch.lot_id)
+        .join(Trade, Trade.id == TradeMatch.sell_trade_id)
+        .where(
+            Lot.account_id == account,
+            Lot.security_id == security_id,
+            Lot.strategy_id == strategy,
+            Trade.status == "ACTIVE",
+        )
+    )
+    realized = round_amount(sum((match.realized_pnl for match in active_matches), Decimal("0")))
+    snapshots = quote_collector.service.read_cached(session, [security])
+    snapshot = snapshots[0] if snapshots else None
+    quote = (
+        None
+        if snapshot is None
+        else {
+            "symbol": snapshot.symbol,
+            "securityId": security.id,
+            "market": security.market,
+            "currency": currency_for_market(security.market),
+            "lastPrice": _fmt(snapshot.last_price, 6),
+            "prevClose": _fmt(snapshot.prev_close, 6),
+            "changePct": _fmt(snapshot.change_pct, 6),
+            "sourceTime": _dt_utc(snapshot.source_time),
+            "fetchedAt": _dt_utc(snapshot.fetched_at),
+            "provider": snapshot.provider,
+            "isStale": snapshot.is_stale,
+        }
+    )
+    rows = []
+    for lot in lots:
+        pnl = None
+        if lot.status == "OPEN" and lot.remaining_qty > 0 and snapshot is not None:
+            pnl = round_amount(snapshot.last_price * lot.remaining_qty - lot.remaining_cost)
+        rows.append(
+            {
+                **lot_data(lot),
+                "unrealizedPnl": _fmt(pnl),
+                "unrealizedReturnPct": _fmt(
+                    AccountingService.return_pct(pnl, lot.remaining_cost), 6
+                ),
+                "effectiveTarget": ProfitSettingsService.effective_target(session, lot),
+            }
+        )
+    return {
+        "lots": rows,
+        "closedLotCount": len(closed),
+        "realizedPnl": _fmt(realized),
+        "quote": quote,
+        "currency": currency_for_market(security.market),
+        "closedTradeDetails": _closed_trade_details(closed) if include_closed else [],
+    }
 
 
 @router.get("/lots/{lot_id}/matches")
@@ -551,17 +700,50 @@ def list_targets(lot_id: str, session: Session = Depends(get_db)) -> list[dict[s
 
 
 @router.post("/lots/{lot_id}/targets", status_code=status.HTTP_201_CREATED)
-def create_target(lot_id: str, payload: ProfitTargetCreate, session: Session = Depends(get_db)) -> dict[str, Any]:
+def create_target(
+    lot_id: str, payload: ProfitTargetCreate, session: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """新增显式分段目标，已取消或完成的目标不占用当前计划股数。"""
     begin_write(session)
     try:
         lot = session.get(Lot, lot_id)
         if lot is None:
             raise EntityNotFoundError("lot was not found", details={"lot_id": lot_id})
-        planned = round_qty(sum((target.planned_sell_qty for target in lot.targets), Decimal("0")) + payload.planned_sell_qty)
+        planned = round_qty(
+            sum(
+                (
+                    target.planned_sell_qty
+                    for target in lot.targets
+                    if target.status not in {"CANCELLED", "COMPLETED"}
+                ),
+                Decimal("0"),
+            )
+            + payload.planned_sell_qty
+        )
         if planned > lot.remaining_qty:
-            raise ValidationError("planned target quantity exceeds lot remaining quantity", details={"planned": str(planned), "remaining": str(lot.remaining_qty)})
-        price = TargetService.solve_price(unit_cost=lot.unit_cost, planned_sell_qty=payload.planned_sell_qty, target_return_pct=payload.target_return_pct, basis=CalcBasis(payload.calculation_basis), commission_rate=payload.commission_rate, minimum_commission=payload.minimum_commission, stamp_duty_rate=payload.stamp_duty_rate, transfer_fee_rate=payload.transfer_fee_rate)
-        target = ProfitTarget(lot_id=lot.id, target_return_pct=payload.target_return_pct, planned_sell_qty=payload.planned_sell_qty, calculation_basis=payload.calculation_basis, target_price_estimate=price, alert_enabled=payload.alert_enabled, status="ACTIVE")
+            raise ValidationError(
+                "planned target quantity exceeds lot remaining quantity",
+                details={"planned": str(planned), "remaining": str(lot.remaining_qty)},
+            )
+        price = TargetService.solve_price(
+            unit_cost=lot.unit_cost,
+            planned_sell_qty=payload.planned_sell_qty,
+            target_return_pct=payload.target_return_pct,
+            basis=CalcBasis(payload.calculation_basis),
+            commission_rate=payload.commission_rate,
+            minimum_commission=payload.minimum_commission,
+            stamp_duty_rate=payload.stamp_duty_rate,
+            transfer_fee_rate=payload.transfer_fee_rate,
+        )
+        target = ProfitTarget(
+            lot_id=lot.id,
+            target_return_pct=payload.target_return_pct,
+            planned_sell_qty=payload.planned_sell_qty,
+            calculation_basis=payload.calculation_basis,
+            target_price_estimate=price,
+            alert_enabled=payload.alert_enabled,
+            status="ACTIVE",
+        )
         session.add(target)
         session.flush()
         finish_write(session, True)
@@ -572,7 +754,10 @@ def create_target(lot_id: str, payload: ProfitTargetCreate, session: Session = D
 
 
 @router.patch("/targets/{target_id}")
-def update_target(target_id: str, payload: ProfitTargetPatch, session: Session = Depends(get_db)) -> dict[str, Any]:
+def update_target(
+    target_id: str, payload: ProfitTargetPatch, session: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """修改显式目标并排除已取消目标的计划量。"""
     begin_write(session)
     try:
         target = session.get(ProfitTarget, target_id)
@@ -581,14 +766,40 @@ def update_target(target_id: str, payload: ProfitTargetPatch, session: Session =
         lot = target.lot
         values = payload.model_dump(exclude_unset=True)
         planned = values.get("planned_sell_qty", target.planned_sell_qty)
-        total = round_qty(sum((item.planned_sell_qty for item in lot.targets if item.id != target.id), Decimal("0")) + planned)
+        total = round_qty(
+            sum(
+                (
+                    item.planned_sell_qty
+                    for item in lot.targets
+                    if item.id != target.id and item.status not in {"CANCELLED", "COMPLETED"}
+                ),
+                Decimal("0"),
+            )
+            + planned
+        )
         if total > lot.remaining_qty:
-            raise ValidationError("planned target quantity exceeds lot remaining quantity", details={"planned": str(total), "remaining": str(lot.remaining_qty)})
-        for key in ("planned_sell_qty", "target_return_pct", "alert_enabled", "status", "calculation_basis"):
+            raise ValidationError(
+                "planned target quantity exceeds lot remaining quantity",
+                details={"planned": str(total), "remaining": str(lot.remaining_qty)},
+            )
+        for key in (
+            "planned_sell_qty",
+            "target_return_pct",
+            "alert_enabled",
+            "status",
+            "calculation_basis",
+        ):
             if key in values:
                 setattr(target, key, values[key])
-        if any(key in values for key in ("planned_sell_qty", "target_return_pct", "calculation_basis")):
-            target.target_price_estimate = TargetService.solve_price(unit_cost=lot.unit_cost, planned_sell_qty=target.planned_sell_qty, target_return_pct=target.target_return_pct, basis=CalcBasis(target.calculation_basis))
+        if any(
+            key in values for key in ("planned_sell_qty", "target_return_pct", "calculation_basis")
+        ):
+            target.target_price_estimate = TargetService.solve_price(
+                unit_cost=lot.unit_cost,
+                planned_sell_qty=target.planned_sell_qty,
+                target_return_pct=target.target_return_pct,
+                basis=CalcBasis(target.calculation_basis),
+            )
         session.flush()
         finish_write(session, True)
         return target_data(target)
@@ -613,12 +824,40 @@ def delete_target(target_id: str, session: Session = Depends(get_db)) -> None:
 
 
 @router.get("/analytics/summary")
-def analytics_summary(account_id: str | None = Query(default=None, alias="accountId"), session: Session = Depends(get_db)) -> dict[str, Any]:
+def analytics_summary(
+    account_id: str | None = Query(default=None, alias="accountId"),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """返回交易事实汇总及可用持仓估值。"""
     account = resolve_account(session, account_id)
-    trades = list(session.scalars(select(Trade).where(Trade.account_id == account, Trade.status == TradeStatus.ACTIVE.value)))
-    buy_cash = round_amount(sum((t.gross_amount + t.fees_total for t in trades if t.side == TradeSide.BUY.value), Decimal("0")))
-    sell_cash = round_amount(sum((t.gross_amount - t.fees_total for t in trades if t.side == TradeSide.SELL.value), Decimal("0")))
-    realized = round_amount(sum((m.realized_pnl for t in trades if t.side == TradeSide.SELL.value for m in t.matches), Decimal("0")))
+    account_row = session.get(Account, account)
+    if account_row is None:
+        raise EntityNotFoundError("account was not found", details={"account_id": account})
+    trades = list(
+        session.scalars(
+            select(Trade).where(
+                Trade.account_id == account, Trade.status == TradeStatus.ACTIVE.value
+            )
+        )
+    )
+    buy_cash = round_amount(
+        sum(
+            (t.gross_amount + t.fees_total for t in trades if t.side == TradeSide.BUY.value),
+            Decimal("0"),
+        )
+    )
+    sell_cash = round_amount(
+        sum(
+            (t.gross_amount - t.fees_total for t in trades if t.side == TradeSide.SELL.value),
+            Decimal("0"),
+        )
+    )
+    realized = round_amount(
+        sum(
+            (m.realized_pnl for t in trades if t.side == TradeSide.SELL.value for m in t.matches),
+            Decimal("0"),
+        )
+    )
     lots = list(session.scalars(select(Lot).where(Lot.account_id == account, Lot.status == "OPEN")))
     remaining_cost = round_amount(sum((lot.remaining_cost for lot in lots), Decimal("0")))
     remaining_qty = round_qty(sum((lot.remaining_qty for lot in lots), Decimal("0")))
@@ -629,7 +868,126 @@ def analytics_summary(account_id: str | None = Query(default=None, alias="accoun
         if quote is not None:
             have_quote = True
             unrealized += quote.last_price * lot.remaining_qty - lot.remaining_cost
-    return {"currency": session.get(Account, account).currency, "totalBuyCashOut": _fmt(buy_cash), "totalSellCashIn": _fmt(sell_cash), "realizedPnl": _fmt(realized), "unrealizedPnl": _fmt(round_amount(unrealized)) if have_quote else None, "remainingQty": _fmt(remaining_qty), "remainingCost": _fmt(remaining_cost)}
+    return {
+        "currency": account_row.currency,
+        "totalBuyCashOut": _fmt(buy_cash),
+        "totalSellCashIn": _fmt(sell_cash),
+        "realizedPnl": _fmt(realized),
+        "unrealizedPnl": _fmt(round_amount(unrealized)) if have_quote else None,
+        "remainingQty": _fmt(remaining_qty),
+        "remainingCost": _fmt(remaining_cost),
+    }
+
+
+def setting_data(setting: ProfitSetting | None) -> dict[str, Any] | None:
+    """返回本层明确设置；没有设置时保留 null 以便界面表达继承。"""
+    if setting is None:
+        return None
+    return {
+        "id": setting.scope_key,
+        "securityId": setting.security_id,
+        "targetReturnPct": _fmt(setting.target_return_pct, 6),
+        "calculationBasis": setting.calculation_basis,
+        "alertEnabled": setting.alert_enabled,
+    }
+
+
+def _save_setting(
+    session: Session,
+    payload: ProfitSettingWrite,
+    *,
+    security_id: str | None = None,
+) -> dict[str, Any] | None:
+    """在调用方写事务内保存或清除唯一覆盖值，不复制到任何批次。"""
+    key = ProfitSettingsService.scope_key(security_id)
+    setting = session.get(ProfitSetting, key)
+    if payload.target_return_pct is None:
+        if setting is not None:
+            session.delete(setting)
+        session.flush()
+        return None
+    if setting is None:
+        setting = ProfitSetting(scope_key=key, security_id=security_id)
+        session.add(setting)
+    setting.target_return_pct = round_price(payload.target_return_pct)
+    setting.calculation_basis = payload.calculation_basis
+    setting.alert_enabled = payload.alert_enabled
+    session.flush()
+    return setting_data(setting)
+
+
+@router.get("/profit-settings")
+def get_global_profit_setting(session: Session = Depends(get_db)) -> dict[str, Any] | None:
+    """读取全应用唯一的全局止盈默认值。"""
+    return setting_data(session.get(ProfitSetting, ProfitSettingsService.scope_key()))
+
+
+@router.put("/profit-settings")
+def save_global_profit_setting(
+    payload: ProfitSettingWrite,
+    session: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """覆盖或清除全局设置，读取继承该值的批次时即时生效。"""
+    begin_write(session)
+    try:
+        result = _save_setting(session, payload)
+        finish_write(session, True)
+        return result
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.get("/securities/{security_id}/profit-settings")
+def get_security_profit_setting(
+    security_id: str,
+    session: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """读取个股本层覆盖；null 表示使用全局，不写入继承副本。"""
+    _security_or_404(session, security_id)
+    return setting_data(session.get(ProfitSetting, ProfitSettingsService.scope_key(security_id)))
+
+
+@router.put("/securities/{security_id}/profit-settings")
+def save_security_profit_setting(
+    security_id: str,
+    payload: ProfitSettingWrite,
+    session: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """保存个股覆盖，收益率为空时恢复全局继承。"""
+    begin_write(session)
+    try:
+        _security_or_404(session, security_id)
+        result = _save_setting(session, payload, security_id=security_id)
+        finish_write(session, True)
+        return result
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.post("/securities/{security_id}/recalculate")
+def recalculate_security(
+    security_id: str,
+    account_id: str | None = Query(default=None, alias="accountId"),
+    strategy_id: str | None = Query(default=None, alias="strategyId"),
+    actor: str | None = Depends(request_actor),
+    session: Session = Depends(get_db),
+) -> dict[str, int]:
+    """原子清理并重建指定持仓派生数据，不修改交易事实或其他持仓。"""
+    begin_write(session)
+    try:
+        account, strategy = _resolve_trade_scope(session, account_id, strategy_id, security_id)
+        result = RecalculationService(session, actor=actor).rebuild(
+            account_id=account,
+            security_id=security_id,
+            strategy_id=strategy,
+        )
+        finish_write(session, True)
+        return result
+    except Exception:
+        finish_write(session, False)
+        raise
 
 
 @router.get("/quotes")

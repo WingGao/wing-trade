@@ -15,7 +15,7 @@ from app.domain.exceptions import (
     ValidationError,
 )
 from app.domain.models import Fees, MatchRequest
-from app.domain.precision import round_amount, round_qty
+from app.domain.precision import ensure_decimal, round_amount, round_qty
 from app.models.ledger import AuditEvent, Lot, Trade, TradeMatch
 from app.services.accounting import AccountingService
 from app.services.cycle import CycleService
@@ -36,13 +36,14 @@ class TradeLedgerService:
 
     @staticmethod
     def _fees(fees: Fees | None, values: dict[str, object]) -> Fees:
+        """将兼容调用的费用参数显式校验为精确十进制。"""
         if fees is not None:
             return fees
         return Fees(
-            commission=values.get("commission", Decimal("0")),
-            stamp_duty=values.get("stamp_duty", Decimal("0")),
-            transfer_fee=values.get("transfer_fee", Decimal("0")),
-            other_fee=values.get("other_fee", Decimal("0")),
+            commission=ensure_decimal(values.get("commission", Decimal("0"))),
+            stamp_duty=ensure_decimal(values.get("stamp_duty", Decimal("0"))),
+            transfer_fee=ensure_decimal(values.get("transfer_fee", Decimal("0"))),
+            other_fee=ensure_decimal(values.get("other_fee", Decimal("0"))),
         )
 
     def _finish(self, *, commit: bool) -> None:
@@ -113,9 +114,10 @@ class TradeLedgerService:
         entity_type: str,
         entity_id: str,
         action: str,
-        before: dict[str, str | None],
+        before: dict[str, str | None] | None,
         after: dict[str, str | None],
     ) -> None:
+        """只在快照变化时追加实体审计，兼容首次创建时没有旧快照。"""
         if before != after:
             self._audit(entity_type, entity_id, action, before=before, after=after)
 

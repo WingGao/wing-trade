@@ -28,6 +28,7 @@ change must remain auditable.
   uses ascending order, LIFO uses descending order, and an omitted strategy
   remains FIFO. Automatic candidates must be OPEN, have positive remaining
   quantity, match the sell scope, and be bought no later than the sell.
+- `EQUAL` 沿用最近优先排序，在能覆盖卖出的最小集合内按容量均分，整数余股按最近优先；旧小数持仓保持四位精度与数量守恒。界面默认显式传 EQUAL，未指定策略的旧 API 仍默认 FIFO。
 - Manual matches must total the sell quantity and belong to the same
   account/security/strategy.
 - A final match consumes the lot's current remaining cost; partial matches use

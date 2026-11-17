@@ -19,19 +19,31 @@ class AccountingService:
 
     @staticmethod
     def fee_total(fees: Fees | None = None, **fee_values: object) -> Decimal:
+        """校验兼容费用参数后返回精确手续费合计。"""
         if fees is None:
-            fees = Fees(**{key: value for key, value in fee_values.items() if value is not None})
+            fees = Fees(
+                **{
+                    key: ensure_decimal(value)
+                    for key, value in fee_values.items()
+                    if value is not None
+                }
+            )
         return fees.total
 
     @staticmethod
-    def calculate_buy(qty: object, price: object, fees: Fees | None = None, **fee_values: object) -> BuyCalculation:
+    def calculate_buy(
+        qty: object, price: object, fees: Fees | None = None, **fee_values: object
+    ) -> BuyCalculation:
+        """校验精确数量、价格与费用并计算买入含费成本。"""
         quantity = round_qty(qty)
         unit_price = round_price(price)
         if quantity <= 0:
             raise InvalidQuantityError("quantity must be positive")
         if unit_price <= 0:
             raise InvalidPriceError("price must be positive")
-        actual_fees = fees or Fees(**{key: value for key, value in fee_values.items() if value is not None})
+        actual_fees = fees or Fees(
+            **{key: ensure_decimal(value) for key, value in fee_values.items() if value is not None}
+        )
         gross = round_amount(unit_price * quantity)
         cash_out = round_amount(gross + actual_fees.total)
         return BuyCalculation(
@@ -44,14 +56,19 @@ class AccountingService:
         )
 
     @staticmethod
-    def calculate_sell(qty: object, price: object, fees: Fees | None = None, **fee_values: object) -> SellCalculation:
+    def calculate_sell(
+        qty: object, price: object, fees: Fees | None = None, **fee_values: object
+    ) -> SellCalculation:
+        """校验精确数量、价格与费用并计算卖出净回款。"""
         quantity = round_qty(qty)
         unit_price = round_price(price)
         if quantity <= 0:
             raise InvalidQuantityError("quantity must be positive")
         if unit_price <= 0:
             raise InvalidPriceError("price must be positive")
-        actual_fees = fees or Fees(**{key: value for key, value in fee_values.items() if value is not None})
+        actual_fees = fees or Fees(
+            **{key: ensure_decimal(value) for key, value in fee_values.items() if value is not None}
+        )
         gross = round_amount(unit_price * quantity)
         cash_in = round_amount(gross - actual_fees.total)
         return SellCalculation(

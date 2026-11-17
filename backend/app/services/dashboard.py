@@ -424,6 +424,11 @@ class DashboardService:
             "totalSellCashIn": sell_cash,
             "realizedPnl": realized,
             "unrealizedPnl": summary_unrealized,
+            "marketValue": (
+                round_amount(remaining_cost + summary_unrealized)
+                if summary_unrealized is not None
+                else None
+            ),
             "unrealizedReturnPct": AccountingService.return_pct(summary_unrealized, remaining_cost),
             "remainingQty": remaining_qty,
             "remainingCost": remaining_cost,

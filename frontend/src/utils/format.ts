@@ -22,11 +22,48 @@ export function formatDecimal(value: string | null | undefined, digits = 2): str
 }
 
 /** 将金额按账户币种格式化，缺失值不会被误显示为零。 */
-export function formatMoney(value: string | null | undefined, currency: Currency | null | undefined): string {
-  const formatted = formatDecimal(value)
+export function formatMoney(value: string | null | undefined, currency: Currency | null | undefined, digits = 2): string {
+  const formatted = formatDecimal(value, digits)
   if (formatted === '—') return formatted
   const symbol = currency === 'USD' ? '$' : currency === 'CNY' ? '¥' : ''
   return `${symbol} ${formatted}`.trim()
+}
+
+/** 股数按整数展示；仅改变展示精度，不改变服务端账务值。 */
+export function formatQuantity(value: string | null | undefined): string {
+  return formatDecimal(value, 0)
+}
+
+/** 以字符串移动十进制小数点，避免止盈比例转换混入浮点误差。 */
+function shiftDecimal(value: string, places: number): string {
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(value.trim())
+  if (!match || !(match[2] || match[3])) throw new Error('请输入有效的收益率')
+  const sign = match[1] === '-' ? '-' : ''
+  const whole = match[2] || '0'
+  const fraction = match[3] || ''
+  const digits = whole + fraction
+  const boundary = whole.length + places
+  const shifted = boundary <= 0 ? `0.${'0'.repeat(-boundary)}${digits}` : boundary >= digits.length ? `${digits}${'0'.repeat(boundary - digits.length)}` : `${digits.slice(0, boundary)}.${digits.slice(boundary)}`
+  const [integer = '0', decimal = ''] = shifted.split('.')
+  const normalizedInteger = integer.replace(/^0+(?=\d)/, '')
+  const normalizedDecimal = decimal.replace(/0+$/, '')
+  return `${sign}${normalizedInteger}${normalizedDecimal ? `.${normalizedDecimal}` : ''}`
+}
+
+/** 将弹窗输入的百分数精确转换为服务端小数收益率，例如 10→0.1。 */
+export function percentInputToRate(value: string): string {
+  return shiftDecimal(value, -2)
+}
+
+/** 将服务端小数收益率精确转换为表单百分数，例如 0.1→10。 */
+export function rateToPercentInput(value: string): string {
+  return shiftDecimal(value, 2)
+}
+
+/** 展示止盈的小数率，区别于服务端已乘百的浮盈收益率。 */
+export function formatTargetPercent(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—'
+  try { return formatPercent(rateToPercentInput(value)) } catch { return '—' }
 }
 
 /** 将收益率服务端字符串格式化为百分数，缺失值显示破折号。 */

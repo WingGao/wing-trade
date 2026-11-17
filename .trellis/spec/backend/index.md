@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Implemented for M0 ledger |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Implemented |
 | [Market Data Guidelines](./market-data-guidelines.md) | Quote provider, cache, staleness, circuit breaker | Implemented for M1 |
+| [持仓批次与三级止盈契约](./portfolio-batch-contracts.md) | 等量配对、派生重建、继承投影、外部名称和真实日内行情 | 已实现 |
 
 ---
 

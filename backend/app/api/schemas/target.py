@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import Field
 
@@ -41,4 +42,12 @@ class ProfitTargetRead(APIModel):
     status: str
     triggered_at: object | None = None
     created_at: object
+
+
+class ProfitSettingWrite(APIModel):
+    """小数率形式的止盈覆盖，空值表示删除当前层并恢复继承。"""
+
+    target_return_pct: Decimal | None = Field(ge=0)
+    calculation_basis: Literal["NET", "GROSS"] = "NET"
+    alert_enabled: bool = True
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from .common import APIModel
 
@@ -16,6 +17,20 @@ class TradeMatchRead(APIModel):
     realized_pnl: Decimal
     matching_method: str
     created_at: datetime
+
+
+class SettledTradeDetailRead(APIModel):
+    """已结清批次的原始买入或本批卖出分摊，不重复计算整笔跨批成交。"""
+
+    lot_id: str
+    trade_id: str
+    side: Literal["BUY", "SELL"]
+    executed_at: datetime
+    qty: Decimal
+    original_trade_qty: Decimal
+    price: Decimal
+    cash_amount: Decimal
+    realized_pnl: Decimal | None = None
 
 
 class LotRead(APIModel):

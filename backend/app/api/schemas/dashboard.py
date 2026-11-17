@@ -66,6 +66,7 @@ class DashboardSummaryRead(APIModel):
     realized_pnl: Decimal
     unrealized_pnl: Decimal | None = None
     unrealized_return_pct: Decimal | None = None
+    market_value: Decimal | None = None
     remaining_qty: Decimal
     remaining_cost: Decimal
     valuation_status: Literal["fresh", "stale", "partial", "unavailable", "empty"]

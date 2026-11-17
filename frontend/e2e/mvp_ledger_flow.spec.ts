@@ -56,6 +56,7 @@ function makePosition(overrides: Partial<DashboardPosition> = {}): DashboardPosi
 function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
   return {
     currency: 'CNY',
+    marketValue: '1000.0000',
     totalBuyCashOut: '1000.0000',
     totalSellCashIn: '0.0000',
     realizedPnl: '0.0000',
@@ -126,7 +127,7 @@ function makeSellPreview(qty: string): SellPreview {
         allocatedBuyCost: '82.0000',
         allocatedSellNet: `${Number(qty) * 30}.0000`,
         realizedPnl: '52.0000',
-        matchingMethod: 'LIFO',
+        matchingMethod: 'EQUAL',
       },
     ],
   }
@@ -134,6 +135,8 @@ function makeSellPreview(qty: string): SellPreview {
 
 /** 模拟账户列表，使快速记账账户选择不会访问真实后端。 */
 async function mockAccounts(page: Page) {
+  await page.route('**/api/v1/securities/lookup**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ securities: [{ id: 'security-1', market: 'SH', symbol: '600519', name: '贵州茅台', currency: 'CNY' }], error: null }) }))
+  await page.route('**/api/v1/securities?query=', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
   await page.route('**/api/v1/accounts', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -290,7 +293,7 @@ test.describe('portfolio journal dashboard', () => {
   })
 
   /** 验证最近买入详情、输入失效和旧预览响应隔离。 */
-  test('previews LIFO buy details and submits only the current preview', async ({ page }) => {
+  test('previews equal buy details and submits only the current preview', async ({ page }) => {
     const previewBodies: Array<{ qty: string; matchingMethod?: string }> = []
     const sellBodies: Array<{ qty: string; matches: Array<{ lotId: string; matchedQty: string }> }> = []
     let sold = false
@@ -328,12 +331,12 @@ test.describe('portfolio journal dashboard', () => {
     const inputs = drawer.locator('input')
     await inputs.nth(0).fill('2')
     await inputs.nth(1).fill('30')
-    await drawer.getByRole('button', { name: '预览最近买入优先' }).click()
+    await drawer.getByRole('button', { name: '预览最近优先等量配对' }).click()
 
     await expect.poll(() => previewBodies.length).toBe(1)
-    expect(previewBodies[0]?.matchingMethod).toBe('LIFO')
+    expect(previewBodies[0]?.matchingMethod).toBe('EQUAL')
     const row = drawer.locator('.el-table__row')
-    await expect(row).toContainText('原始买入 10.0000 · 预览前可用 10.0000')
+    await expect(row).toContainText('原始买入 10 · 预览前可用 10')
     await expect(row).toContainText('¥ 20.00')
     await expect(row).toContainText('lot-newe')
     await expect(row.locator('.lot-code')).toHaveAttribute('title', 'lot-newer-1234567890')
@@ -342,24 +345,24 @@ test.describe('portfolio journal dashboard', () => {
     const confirm = drawer.getByRole('button', { name: '确认卖出' })
     await expect(confirm).toBeDisabled()
     await expect(drawer.getByText('尚无有效预览')).toBeVisible()
-    await drawer.getByRole('button', { name: '预览最近买入优先' }).click()
+    await drawer.getByRole('button', { name: '预览最近优先等量配对' }).click()
     await expect.poll(() => previewBodies.length).toBe(2)
     await inputs.nth(0).fill('4')
     await expect(confirm).toBeDisabled()
-    await drawer.getByRole('button', { name: '预览最近买入优先' }).click()
+    await drawer.getByRole('button', { name: '预览最近优先等量配对' }).click()
     await expect.poll(() => previewBodies.length).toBe(3)
-    await expect(row).toContainText('4.00')
+    await expect(row.locator('.match-primary').nth(2)).toHaveText('4')
 
     const slowResponse = page.waitForResponse((response) => response.url().includes('/trades/sell/preview') && response.request().postDataJSON().qty === '3')
     releaseSlowPreview()
     await slowResponse
     await expect(confirm).toBeEnabled()
-    await expect(row).toContainText('4.00')
+    await expect(row.locator('.match-primary').nth(2)).toHaveText('4')
     await confirm.click()
     await expect.poll(() => sellBodies.length).toBe(1)
     expect(sellBodies[0]).toMatchObject({ qty: '4.0000', matches: [{ lotId: 'lot-newer-1234567890', matchedQty: '4.0000' }] })
     const positionRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SH:600519' })
-    await expect(positionRow).toContainText('6.0000')
+    await expect(positionRow.locator('td').nth(1)).toHaveText('6')
   })
 
   test('distinguishes zero, stale and unavailable values without showing a partial total', async ({ page }) => {

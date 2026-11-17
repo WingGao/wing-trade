@@ -99,13 +99,13 @@ dashboard.value = snapshot
 
 ### 2. Signatures
 
-- `api.previewSell(payload)` 请求可包含 `matchingMethod: LIFO`。
+- `api.previewSell(payload)` 工作台请求包含 `matchingMethod: EQUAL`，服务端仍兼容 FIFO/LIFO。
 - `SellPreview` 包含 `currency`、`executedAt`、金额字段和 `SellPreviewMatch[]`。
 - `SellPreviewMatch` 包含真实买入信息、可用数量、本次配对数量和服务端分摊结果。
 
 ### 3. Contracts
 
-- 当前工作台显式请求 `LIFO`；账户、证券、数量、价格或成交时间变化后立即清空预览并推进请求代次。
+- 当前工作台显式请求 `EQUAL`：最近买入的最小覆盖集合内按容量等量分配；账户、证券、数量、价格或成交时间变化后立即清空预览并推进请求代次。
 - 响应只有在代次仍为当前代次时才能写入；失败或过期响应不得重新启用“确认卖出”。
 - 确认按钮仅在存在预览、预览输入快照与当前输入完全一致且没有预览请求在途时启用。
 - 提交使用预览响应的标准化数量、价格、成交时间及明确批次；按钮标签和展示文案不得再写 FIFO。
@@ -129,7 +129,7 @@ dashboard.value = snapshot
 
 ### 6. Tests Required
 
-- E2E 断言请求包含 `matchingMethod=LIFO`，并展示买入时间、原始成交价、配对数量和可用数量。
+- E2E 断言请求包含 `matchingMethod=EQUAL`，并展示买入时间、原始成交价、配对数量和可用数量。
 - E2E 制造两次乱序预览响应，断言旧响应不能覆盖新预览或启用确认。
 - E2E 断言确认请求携带当前预览的明确 `lotId` 与 `matchedQty`。
 - `pnpm run type-check`、`pnpm run build` 和相关 Playwright 用例必须通过。

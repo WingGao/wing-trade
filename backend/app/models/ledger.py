@@ -196,6 +196,26 @@ class ProfitTarget(Base):
     lot: Mapped[Lot] = relationship(back_populates="targets")
 
 
+class ProfitSetting(Base):
+    """全局单例或单个证券的止盈默认值，不为继承批次复制记录。"""
+
+    __tablename__ = "profit_settings"
+    __table_args__ = (
+        UniqueConstraint("security_id", name="uq_profit_settings_security"),
+    )
+
+    scope_key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    security_id: Mapped[str | None] = mapped_column(
+        ForeignKey("securities.id", ondelete="CASCADE")
+    )
+    target_return_pct: Mapped[Decimal] = mapped_column(ExactDecimal(6), nullable=False)
+    calculation_basis: Mapped[str] = mapped_column(String(8), nullable=False, default="NET")
+    alert_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
 class QuoteCache(Base):
     __tablename__ = "quote_cache"
 

@@ -1,6 +1,6 @@
 export type Currency = 'CNY' | 'USD'
 
-export type MatchingMethod = 'FIFO' | 'LIFO' | 'MANUAL'
+export type MatchingMethod = 'FIFO' | 'LIFO' | 'EQUAL' | 'MANUAL'
 
 export type DashboardMode = 'cache' | 'auto' | 'manual'
 
@@ -21,6 +21,35 @@ export interface Security {
   securityType?: string
   status?: string
   currency?: Currency
+}
+
+export interface SecurityCandidate extends Omit<Security, 'id'> {
+  id?: string
+}
+
+export interface ProfitSetting {
+  targetReturnPct: string
+  calculationBasis: 'NET' | 'GROSS'
+  alertEnabled: boolean
+}
+
+export interface EffectiveTarget extends ProfitSetting {
+  source: 'LOT' | 'SECURITY' | 'GLOBAL'
+  id?: string
+  plannedSellQty?: string
+  targetPriceEstimate: string | null
+}
+
+export interface IntradayRead {
+  symbol: string
+  currency: Currency
+  tradingDate: string
+  points: Array<{ time: string; price: string }>
+  quote: Quote | null
+  provider: string
+  fetchedAt: string | null
+  isStale: boolean
+  error: string | null
 }
 
 export interface Quote {
@@ -68,6 +97,30 @@ export interface Lot {
   executedAt: string
   status: string
   targets?: ProfitTarget[]
+  unrealizedPnl?: string | null
+  unrealizedReturnPct?: string | null
+  effectiveTarget?: EffectiveTarget | null
+}
+
+export interface LotsRead {
+  lots: Lot[]
+  closedLotCount: number
+  realizedPnl: string
+  quote?: Quote | null
+  currency?: Currency
+  closedTradeDetails?: SettledTradeDetail[]
+}
+
+export interface SettledTradeDetail {
+  lotId: string
+  tradeId: string
+  side: 'BUY' | 'SELL'
+  executedAt: string
+  qty: string
+  originalTradeQty: string
+  price: string
+  cashAmount: string
+  realizedPnl: string | null
 }
 
 export interface ProfitTarget {
@@ -97,6 +150,10 @@ export interface Trade {
   status: string
   clientRequestId?: string | null
   memo?: string | null
+  currency?: Currency
+  market?: string | null
+  symbol?: string | null
+  name?: string | null
 }
 
 export interface AnalyticsSummary {
@@ -125,6 +182,7 @@ export interface DashboardPosition extends Position {
 }
 
 export interface DashboardSummary extends AnalyticsSummary {
+  marketValue: string | null
   currency: Currency
   unrealizedPnl: string | null
   unrealizedReturnPct: string | null

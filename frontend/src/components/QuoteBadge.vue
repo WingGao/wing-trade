@@ -20,7 +20,7 @@ function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' {
 <template>
   <span v-if="quote" class="quote-inline">
     <span class="quote-value-row">
-      <strong>{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency) }}</strong>
+      <strong>{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, 3) }}</strong>
       <span class="quote-currency">{{ quote.currency ?? props.currency ?? '币种未知' }}</span>
       <span :class="['quote-change', trendClass(quote.changePct)]">{{ formatSignedPercent(quote.changePct) }}</span>
       <el-tag :type="quoteStatusType(quote)" size="small">{{ quoteStatusLabel(quote) }}</el-tag>

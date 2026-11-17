@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
 
 from app.domain.exceptions import DomainError
 
@@ -24,16 +25,33 @@ def _status_for_code(code: str) -> int:
     return 400
 
 
-async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
-    return JSONResponse(status_code=_status_for_code(exc.code), content=error_payload(exc.code, exc.message, exc.details))
+async def domain_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """以统一信封返回领域错误，并保持框架异常处理器的通用签名。"""
+    if not isinstance(exc, DomainError):
+        return await generic_error_handler(_request, exc)
+    return JSONResponse(
+        status_code=_status_for_code(exc.code),
+        content=error_payload(exc.code, exc.message, exc.details),
+    )
 
 
-async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
-    return JSONResponse(status_code=422, content=error_payload("VALIDATION_ERROR", "request validation failed", {"errors": exc.errors()}))
+async def validation_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """安全序列化 Pydantic 的 Decimal 和异常上下文，避免校验失败变成 500。"""
+    if not isinstance(exc, RequestValidationError):
+        return await generic_error_handler(_request, exc)
+    errors = jsonable_encoder(exc.errors(), custom_encoder={Decimal: str, ValueError: str})
+    return JSONResponse(
+        status_code=422,
+        content=error_payload("VALIDATION_ERROR", "request validation failed", {"errors": errors}),
+    )
 
 
-async def integrity_error_handler(_request: Request, _exc: IntegrityError) -> JSONResponse:
-    return JSONResponse(status_code=409, content=error_payload("CONFLICT", "resource conflicts with an existing record"))
+async def integrity_error_handler(_request: Request, _exc: Exception) -> JSONResponse:
+    """以通用异常处理器签名返回数据库冲突错误。"""
+    return JSONResponse(
+        status_code=409,
+        content=error_payload("CONFLICT", "resource conflicts with an existing record"),
+    )
 
 
 async def generic_error_handler(_request: Request, exc: Exception) -> JSONResponse:

@@ -60,8 +60,8 @@ development dependencies are available.
 
 ### 3. Contracts
 
-- 自动策略只接受 `FIFO`、`LIFO`；省略策略时保持 `FIFO`。传入明确批次时按 `MANUAL` 处理。
-- `FIFO` 按 `(executed_at, created_at, id)` 升序，`LIFO` 按同一键降序，保证结果确定。
+- 自动策略接受 `FIFO`、`LIFO`、`EQUAL`；省略策略时保持 `FIFO`。传入明确批次时按 `MANUAL` 处理。
+- `FIFO` 按 `(executed_at, created_at, id)` 升序，`LIFO` 与 `EQUAL` 按同一键降序。EQUAL 在最近优先最小覆盖集合内按容量均分，整数余股优先较新批次，详见持仓批次契约。
 - 自动候选必须为 `OPEN`、剩余数量大于零、范围和策略一致，且买入时间不晚于卖出时间。
 - 预览匹配至少返回 `lotId`、`buyExecutedAt`、`buyPrice`、`buyQty`、`availableQty` 和 `matchedQty`；价格与数量保持十进制字符串。
 - `buyPrice` 使用买入交易原始成交价，不能从含费 `unitCost` 反推；`allocatedBuyCost` 继续使用包含费用分摊的服务端结果。
@@ -79,13 +79,13 @@ development dependencies are available.
 
 ### 5. Good / Base / Bad Cases
 
-- Good：较新批次 4 股、较旧批次 10 股，卖出 6 股时按 `4 + 2` 分配并保持总量守恒。
+- Good：较新批次 4 股、较旧批次 10 股，卖出 6 股时 EQUAL 按 `3 + 3` 分配；明确 LIFO 仍为 `4 + 2`，两者均保持总量守恒。
 - Base：旧调用方省略策略，仍由最早买入批次开始分配。
 - Bad：预览返回 LIFO，正式卖出却省略明确批次并按不同状态重新选择。
 
 ### 6. Tests Required
 
-- 单测覆盖 LIFO 跨批次、同时间确定性、范围过滤、未来批次、零数量、已结清和 FIFO 默认兼容。
+- 单测覆盖 EQUAL 等量/容量/余股、LIFO 跨批次、同时间确定性、范围过滤、未来批次、零数量、已结清和 FIFO 默认兼容。
 - API 集成测试逐字段断言预览与正式卖出的 `matchedQty`、`allocatedBuyCost`、`allocatedSellNet`、`realizedPnl` 一致。
 - 手续费场景断言原始买入价与含费分摊成本不同时，两者分别正确返回。
 

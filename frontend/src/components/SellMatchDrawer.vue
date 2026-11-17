@@ -3,7 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Currency, Lot, SellPreview } from '../api/types'
-import { formatDateTime, formatDecimal, formatMoney, trendClass } from '../utils/format'
+import { formatDateTime, formatMoney, formatQuantity, trendClass } from '../utils/format'
 
 interface PreviewInput {
   accountId?: string
@@ -63,7 +63,7 @@ function shortLotId(lotId: string): string {
 watch(() => [props.accountId, props.securityId, form.qty, form.price, form.executedAt], invalidatePreview)
 watch(visible, (open) => { if (!open) invalidatePreview() })
 
-/** 请求最近买入优先的服务端配对预览，并丢弃已过期响应。 */
+/** 请求最近买入优先且跨批次等量分配的预览，并丢弃已过期响应。 */
 async function previewSell() {
   const input = buildPreviewInput()
   if (!input.qty || !input.price || !input.executedAt) {
@@ -81,7 +81,7 @@ async function previewSell() {
       qty: input.qty,
       price: input.price,
       executedAt: input.executedAt,
-      matchingMethod: 'LIFO',
+      matchingMethod: 'EQUAL',
     })
     if (generation !== previewGeneration) return
     preview.value = result
@@ -124,17 +124,18 @@ async function submit() {
 <template>
   <el-drawer v-model="visible" :title="`卖出配对工作台（${previewCurrency ?? currency ?? '币种未知'}）`" size="min(760px, 96vw)">
     <el-form class="sell-form" label-width="86px">
-      <el-form-item label="卖出数量"><el-input v-model="form.qty" inputmode="decimal" /></el-form-item>
+      <el-form-item label="卖出数量"><el-input v-model="form.qty" inputmode="numeric" /></el-form-item>
       <el-form-item label="卖出价格"><el-input v-model="form.price" inputmode="decimal" /></el-form-item>
       <el-form-item label="成交时间"><el-date-picker v-model="form.executedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
     </el-form>
-    <el-button type="primary" :loading="loading" @click="previewSell">预览最近买入优先</el-button>
+    <el-button type="primary" :loading="loading" @click="previewSell">预览最近优先等量配对</el-button>
+    <p class="muted">优先最近买入批次，跨批次尽量等量扣减；容量不足或整数余股由服务端分配，差价计入个股已实现收益。</p>
     <el-divider />
     <div v-if="preview" class="preview">
       <div class="preview-summary">
         <div><span class="preview-label">预计净回款</span><strong>{{ formatMoney(preview.cashIn, previewCurrency) }}</strong></div>
         <div><span class="preview-label">已实现收益</span><strong :class="trendClass(preview.realizedPnl)">{{ formatMoney(preview.realizedPnl, previewCurrency) }}</strong></div>
-        <div><span class="preview-label">预览成交量</span><strong>{{ formatDecimal(preview.qty, 4) }}</strong></div>
+        <div><span class="preview-label">预览成交量</span><strong>{{ formatQuantity(preview.qty) }}</strong></div>
       </div>
       <el-table :data="preview.matches" row-key="lotId" size="small" class="match-table">
         <el-table-column label="买入时间" min-width="170">
@@ -145,8 +146,8 @@ async function submit() {
         </el-table-column>
         <el-table-column label="本次配对数量" min-width="230">
           <template #default="{ row }">
-            <strong class="match-primary">{{ formatDecimal(row.matchedQty, 4) }}</strong>
-            <div class="match-secondary">原始买入 {{ formatDecimal(row.buyQty, 4) }} · 预览前可用 {{ formatDecimal(row.availableQty, 4) }}</div>
+            <strong class="match-primary">{{ formatQuantity(row.matchedQty) }}</strong>
+            <div class="match-secondary">原始买入 {{ formatQuantity(row.buyQty) }} · 预览前可用 {{ formatQuantity(row.availableQty) }}</div>
             <div class="match-secondary">批次 <span class="lot-code" :title="row.lotId">{{ shortLotId(row.lotId) }}</span></div>
           </template>
         </el-table-column>

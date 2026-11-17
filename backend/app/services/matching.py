@@ -98,9 +98,9 @@ class MatchingService:
         try:
             matching_method = MatchingMethod(method)
         except ValueError as exc:
-            raise ValidationError("matching method must be FIFO or LIFO") from exc
-        if matching_method not in {MatchingMethod.FIFO, MatchingMethod.LIFO}:
-            raise ValidationError("automatic matching requires FIFO or LIFO")
+            raise ValidationError("matching method must be FIFO, LIFO or EQUAL") from exc
+        if matching_method not in {MatchingMethod.FIFO, MatchingMethod.LIFO, MatchingMethod.EQUAL}:
+            raise ValidationError("automatic matching requires FIFO, LIFO or EQUAL")
         eligible = cls._eligible_lots(
             lots,
             sell_executed_at=sell_executed_at,
@@ -111,8 +111,10 @@ class MatchingService:
         ordered = sorted(
             eligible,
             key=_lot_sort_key,
-            reverse=matching_method == MatchingMethod.LIFO,
+            reverse=matching_method in {MatchingMethod.LIFO, MatchingMethod.EQUAL},
         )
+        if matching_method == MatchingMethod.EQUAL:
+            return cls._equal_requests(ordered, quantity)
         result: list[MatchRequest] = []
         left = quantity
         for lot in ordered:
@@ -128,6 +130,47 @@ class MatchingService:
                 details={"requested": str(quantity), "unmatched": str(left)},
             )
         return result
+
+    @staticmethod
+    def _equal_requests(ordered: Sequence[object], quantity: Decimal) -> list[MatchRequest]:
+        """在最近优先的最小覆盖集合中按容量均分，整数余股优先分给较新批次。"""
+        selected: list[object] = []
+        available_total = Decimal("0")
+        for lot in ordered:
+            selected.append(lot)
+            available_total += round_qty(_value(lot, "remaining_qty", 0))
+            if available_total >= quantity:
+                break
+        if available_total < quantity:
+            raise InsufficientLotQtyError(
+                "available lots cannot cover sell quantity",
+                details={"requested": str(quantity), "unmatched": str(quantity - available_total)},
+            )
+        capacities = [round_qty(_value(lot, "remaining_qty", 0)) for lot in selected]
+        # 旧 API 支持四位数量；整数持仓按整股均分，小数持仓保留原始精度而不丢股。
+        whole_shares = all(value == value.to_integral_value() for value in [quantity, *capacities])
+        quantum = Decimal("1") if whole_shares else Decimal("0.0001")
+        limits = [int(value / quantum) for value in capacities]
+        allocated = [0] * len(selected)
+        pending = list(range(len(selected)))
+        left = int(quantity / quantum)
+        while pending:
+            share, remainder = divmod(left, len(pending))
+            saturated = [index for index in pending if limits[index] <= share]
+            if saturated:
+                for index in saturated:
+                    allocated[index] = limits[index]
+                    left -= limits[index]
+                pending = [index for index in pending if index not in saturated]
+            else:
+                for offset, index in enumerate(pending):
+                    allocated[index] = share + (1 if offset < remainder else 0)
+                break
+        return [
+            MatchRequest(str(_value(lot, "id")), round_qty(Decimal(amount) * quantum))
+            for lot, amount in zip(selected, allocated, strict=True)
+            if amount > 0
+        ]
 
     @classmethod
     def fifo_preview(

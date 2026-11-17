@@ -2,14 +2,15 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { Account, Currency, DashboardMode, DashboardPosition, Lot, Security, ValuationStatus } from '../api/types'
+import type { Account, Currency, DashboardMode, DashboardPosition, Lot, Security, SecurityCandidate, ValuationStatus } from '../api/types'
 import { useLedgerStore } from '../stores/ledger'
 import { usePreferencesStore } from '../stores/preferences'
 import { api } from '../api/client'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
-import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatSignedPercent, trendClass, valuationStatusLabel } from '../utils/format'
+import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
+import { formatDateTime, formatMoney, formatPercent, formatQuantity, trendClass, valuationStatusLabel } from '../utils/format'
 
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
@@ -18,7 +19,11 @@ const positions = computed(() => ledger.positions)
 const dashboard = computed(() => ledger.dashboard)
 const dashboardCurrency = computed<Currency | null>(() => dashboard.value?.currency ?? null)
 const securityKeyword = ref('')
-const securityResults = ref<Security[]>([])
+const securityResults = ref<SecurityCandidate[]>([])
+const searching = ref(false)
+const searchError = ref('')
+const searched = ref(false)
+const globalTargetVisible = ref(false)
 const selectedSecurity = ref<Security | null>(null)
 const selectedLots = ref<Lot[]>([])
 const accounts = ref<Account[]>([])
@@ -30,11 +35,12 @@ const sellVisible = ref(false)
 const pageAlive = ref(false)
 const manualRefreshing = ref(false)
 const selectedAccount = computed(() => accounts.value.find((account) => account.id === selectedAccountId.value))
-const accountMatchesSecurity = computed(() => !selectedSecurity.value || selectedAccount.value?.currency === selectedSecurity.value.currency)
+const accountMatchesSecurity = computed(() => !selectedSecurity.value || selectedAccount.value?.currency === requiredCurrency.value)
 const requiredCurrency = computed<'CNY' | 'USD'>(() => selectedSecurity.value?.currency ?? (selectedSecurity.value?.market === 'US' ? 'USD' : 'CNY'))
 
 let pollTimer: number | null = null
 let responseGeneration = 0
+let searchGeneration = 0
 
 /** 请求失败时保留上一份一致快照，但将最新状态降级为过期参考估值。 */
 const valuationStatus = computed<ValuationStatus | null>(() => {
@@ -85,6 +91,14 @@ const unrealizedValue = computed(() => {
   if (valuationStatus.value === 'partial' || valuationStatus.value === 'unavailable') return '账户浮盈不可用'
   if (valuationStatus.value === 'empty') return formatMoney('0', dashboardCurrency.value)
   return formatMoney(dashboard.value.summary.unrealizedPnl, dashboardCurrency.value)
+})
+
+/** 市值与浮盈复用同一估值状态，行情不完整时禁止显示部分总值。 */
+const marketValue = computed(() => {
+  if (!dashboard.value) return '—'
+  if (valuationStatus.value === 'partial' || valuationStatus.value === 'unavailable') return '持仓总价值不可用'
+  if (valuationStatus.value === 'empty') return formatMoney('0', dashboardCurrency.value)
+  return formatMoney(dashboard.value.summary.marketValue, dashboardCurrency.value)
 })
 
 /** 返回账户未实现收益率展示值，覆盖不完整或空仓时不伪造数值。 */
@@ -154,28 +168,49 @@ async function refresh() {
   }
 }
 
-/** 搜索本地证券库并把股票代码映射到默认市场。 */
+/** 同时查询外部名称与本地目录；外部不可用时保留可用的本地结果。 */
 async function searchSecurities() {
-  if (!securityKeyword.value.trim()) {
+  const keyword = securityKeyword.value.trim()
+  const generation = ++searchGeneration
+  if (!keyword) {
     securityResults.value = []
     return
   }
-  const symbol = securityKeyword.value.trim().split(/[:\s]/)[0]
+  const symbol = keyword.split(/[:\s]/).filter(Boolean).at(-1) ?? keyword
   marketChoice.value = /^[A-Za-z]+$/.test(symbol) ? 'US' : 'CN'
+  searching.value = true
+  searchError.value = ''
+  searched.value = true
+  selectedSecurity.value = null
+  selectedLots.value = []
+  securityResults.value = []
   try {
-    securityResults.value = await api.securities(securityKeyword.value.trim())
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '证券搜索失败')
+    const [local, external] = await Promise.allSettled([api.securities(keyword), api.lookupSecurities(keyword)])
+    if (generation !== searchGeneration || keyword !== securityKeyword.value.trim()) return
+    const merged = new Map<string, SecurityCandidate>()
+    if (local.status === 'fulfilled') local.value.forEach((item) => merged.set(`${item.market}:${item.symbol}`, item))
+    if (external.status === 'fulfilled') {
+      external.value.securities.forEach((item) => {
+        const key = `${item.market}:${item.symbol}`
+        merged.set(key, { ...merged.get(key), ...item, id: item.id ?? merged.get(key)?.id })
+      })
+      searchError.value = external.value.error ?? ''
+    } else searchError.value = `外部名称查询失败：${external.reason instanceof Error ? external.reason.message : '暂不可用'}；可继续使用本地结果或手动新增。`
+    if (local.status === 'rejected' && external.status === 'rejected') searchError.value = '证券查询失败，请稍后重试或手动填写证券信息。'
+    securityResults.value = [...merged.values()]
+  } finally {
+    if (generation === searchGeneration) searching.value = false
   }
 }
 
 /** 创建本地证券并立即选中，便于继续快速记账。 */
 async function createSecurity() {
-  const symbol = securityKeyword.value.trim().split(/[:\s]/)[0].toUpperCase()
-  if (!symbol) return
+  const raw = securityKeyword.value.trim().split(/\s/)[0].toUpperCase()
+  const symbol = raw.includes(':') ? raw.split(':')[1] : raw
+  if (!symbol || !securityName.value.trim()) { ElMessage.warning('请填写证券代码和名称'); return }
   try {
-    const market = marketChoice.value === 'US' ? 'US' : /^(000|001|002|003|300|301)\d{3}$/.test(symbol) ? 'SZ' : 'SH'
-    const security = await api.createSecurity({ market, symbol, name: securityName.value.trim() || symbol })
+    const market = raw.includes(':') ? raw.split(':')[0] : marketChoice.value === 'US' ? 'US' : /^(000|001|002|003|300|301)\d{3}$/.test(symbol) ? 'SZ' : /^(4|8|92)/.test(symbol) ? 'BJ' : 'SH'
+    const security = await api.createSecurity({ market, symbol, name: securityName.value.trim() })
     await chooseSecurity(security)
     ElMessage.success(`已添加 ${security.market}:${security.symbol}`)
   } catch (error) {
@@ -184,7 +219,11 @@ async function createSecurity() {
 }
 
 /** 选中证券并读取对应账户下的未结清批次。 */
-async function chooseSecurity(security: Security) {
+async function chooseSecurity(candidate: SecurityCandidate) {
+  let security: Security
+  try {
+    security = candidate.id ? { ...candidate, id: candidate.id } : await api.createSecurity({ market: candidate.market, symbol: candidate.symbol, name: candidate.name })
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '添加证券失败'); return }
   selectedSecurity.value = security
   securityKeyword.value = `${security.market}:${security.symbol} ${security.name ?? ''}`.trim()
   securityResults.value = []
@@ -260,6 +299,7 @@ onBeforeUnmount(() => {
     <div><h2>账户总览</h2><p class="muted">以真实交易流水为准，价格、浮盈和汇总来自同一次估值响应。</p></div>
     <div class="toolbar">
       <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
+      <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
       <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
       <el-button type="primary" :loading="manualRefreshing" @click="refresh">刷新行情</el-button>
     </div>
@@ -272,19 +312,20 @@ onBeforeUnmount(() => {
     <template #header><div class="panel-title">快速记账</div></template>
     <div class="search-row">
       <el-input v-model="securityKeyword" placeholder="输入证券代码、名称，例如 600519" clearable @keyup.enter="searchSecurities" />
-      <el-button type="primary" @click="searchSecurities">查找证券</el-button>
+      <el-button type="primary" :loading="searching" @click="searchSecurities">查找证券</el-button>
       <el-select v-if="accounts.length" v-model="selectedAccountId" style="width:190px" placeholder="选择账户"><el-option v-for="account in accounts" :key="account.id" :label="`${account.name} (${account.currency})`" :value="account.id" /></el-select>
       <el-button v-if="selectedSecurity" :disabled="!accountMatchesSecurity" @click="buyVisible = true">买入记账</el-button>
       <el-button v-if="selectedSecurity" type="danger" :disabled="!accountMatchesSecurity || !selectedLots.length" @click="sellVisible = true">卖出配对</el-button>
       <el-button v-if="selectedSecurity && !accounts.some((item) => item.currency === requiredCurrency)" @click="createAccountForCurrency(requiredCurrency)">创建 {{ requiredCurrency }} 账户</el-button>
     </div>
     <div v-if="securityResults.length" class="security-results">
-      <button v-for="security in securityResults" :key="security.id" class="security-option" type="button" @click="chooseSecurity(security)"><strong>{{ security.market }}:{{ security.symbol }}</strong><span>{{ security.name ?? '未命名证券' }}</span></button>
+      <button v-for="security in securityResults" :key="`${security.market}:${security.symbol}`" class="security-option" type="button" @click="chooseSecurity(security)"><strong>{{ security.market }}:{{ security.symbol }}</strong><span>{{ security.name ?? '名称不可用' }}</span></button>
     </div>
-    <div v-if="securityKeyword && !securityResults.length && !selectedSecurity" class="security-create">
+    <el-alert v-if="searchError" :title="searchError" type="warning" :closable="false" class="status-alert" />
+    <div v-if="searched && !searching && securityKeyword && !securityResults.length && !selectedSecurity" class="security-create">
       <span class="muted">本地证券库暂无匹配项，可先新增：</span>
       <el-select v-model="marketChoice" style="width:90px"><el-option label="A股" value="CN" /><el-option label="美股" value="US" /></el-select>
-      <el-input v-model="securityName" placeholder="证券名称（可选）" />
+      <el-input v-model="securityName" placeholder="证券名称" />
       <el-button type="success" @click="createSecurity">新增证券</el-button>
     </div>
     <div v-if="selectedSecurity" class="selected-security">
@@ -294,7 +335,8 @@ onBeforeUnmount(() => {
     </div>
   </el-card>
 
-  <div class="metric-grid">
+  <div class="metric-grid dashboard-metrics">
+    <el-card class="metric-card"><span class="metric-label">持仓总价值</span><div class="metric-value">{{ marketValue }}</div><div class="metric-detail">{{ valuationStatus === 'stale' ? '参考估值 · 行情已过期' : '按当前持仓与同次行情估值' }}</div></el-card>
     <el-card class="metric-card"><span class="metric-label">累计买入现金流</span><div class="metric-value">{{ formatMoney(ledger.summary?.totalBuyCashOut, dashboardCurrency) }}</div></el-card>
     <el-card class="metric-card"><span class="metric-label">累计卖出回款</span><div class="metric-value">{{ formatMoney(ledger.summary?.totalSellCashIn, dashboardCurrency) }}</div></el-card>
     <el-card class="metric-card"><span class="metric-label">已实现收益</span><div :class="['metric-value', trendClass(ledger.summary?.realizedPnl)]">{{ formatMoney(ledger.summary?.realizedPnl, dashboardCurrency) }}</div></el-card>
@@ -311,7 +353,7 @@ onBeforeUnmount(() => {
       <el-table-column label="证券" min-width="180">
         <template #default="{ row }"><a class="security-link" href="#" @click.prevent="openPosition(row)"><strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong><span v-if="row.name" class="position-name">{{ row.name }}</span></a></template>
       </el-table-column>
-      <el-table-column prop="remainingQty" label="持股数" min-width="100" />
+      <el-table-column label="持股数" min-width="100"><template #default="{ row }">{{ formatQuantity(row.remainingQty) }}</template></el-table-column>
       <el-table-column label="加权成本" min-width="120"><template #default="{ row }">{{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency) }}</template></el-table-column>
       <el-table-column label="当前价 / 当日涨幅" min-width="220"><template #default="{ row }"><QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" /></template></el-table-column>
       <el-table-column label="持仓浮盈" min-width="135">
@@ -321,7 +363,7 @@ onBeforeUnmount(() => {
         <template #default="{ row }">
           <div v-if="row.lowestPriceGroup" class="lowest-group">
             <div>共同买入价 <strong>{{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency) }}</strong></div>
-            <div class="muted">{{ row.lowestPriceGroup.lotCount }} 个批次 · 合计剩余 {{ formatDecimal(row.lowestPriceGroup.remainingQty, 2) }} 股 · 成本 {{ formatMoney(row.lowestPriceGroup.remainingCost, row.currency ?? dashboardCurrency) }}</div>
+            <div class="muted">{{ row.lowestPriceGroup.lotCount }} 个批次 · 合计剩余 {{ formatQuantity(row.lowestPriceGroup.remainingQty) }} 股 · 成本 {{ formatMoney(row.lowestPriceGroup.remainingCost, row.currency ?? dashboardCurrency) }}</div>
             <div :class="['group-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">组浮盈 {{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</div>
           </div>
           <span v-else class="muted">无符合条件的未结清批次</span>
@@ -344,4 +386,9 @@ onBeforeUnmount(() => {
 
   <BuyTradeDialog v-if="selectedSecurity" v-model="buyVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" @saved="reloadQuickTrade" />
   <SellMatchDrawer v-if="selectedSecurity" v-model="sellVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :lots="selectedLots" @saved="reloadQuickTrade" />
+  <ProfitSettingDialog v-model="globalTargetVisible" />
 </template>
+
+<style scoped>
+.dashboard-metrics { grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
+</style>
