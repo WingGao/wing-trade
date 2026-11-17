@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "遵循精确值、审计、事务与迁移约束"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "复用范围重建及止盈恢复契约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "保持错误信封和状态码语义"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "保持个股范围、轮询与重算确认约束"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "沿用快照串行和旧响应失效约定"}
+{"file": ".trellis/tasks/11-17-trade-edit-refresh/research/repository-evidence.md", "reason": "加载编辑缺口、持久状态和失败语义的已核实证据"}

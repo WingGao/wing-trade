@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验账务守恒、审计及回滚测试"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "核验范围隔离、重复重建和止盈兼容"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核验前端共享契约、构建和端到端回归"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "核验切换范围、轮询、重算交互回归"}
+{"file": ".trellis/tasks/11-17-trade-edit-refresh/research/repository-evidence.md", "reason": "对照已核实风险和基线检查实现"}

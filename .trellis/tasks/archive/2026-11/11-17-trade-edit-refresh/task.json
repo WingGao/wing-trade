@@ -1,0 +1,29 @@
+{
+  "id": "trade-edit-refresh",
+  "name": "trade-edit-refresh",
+  "title": "交易流水编辑与待刷新提示",
+  "description": "支持编辑交易流水，持久化个股待刷新状态，并在活动仓位和个股详情复用现有重算入口",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "wing",
+  "assignee": "wing",
+  "createdAt": "2026-11-17",
+  "completedAt": "2026-11-18",
+  "branch": "feat/trade-edit-refresh",
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": "acd25c38046e653d99c99590df449106792e9a1c",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_status": "2026-11-18 已完成最终规划评审，用户明确回复开始实施；按已确认范围开发并检查",
+    "execution_status": "实现、独立检查与规格同步完成；pytest 105、E2E 29 通过，无新增 Ruff 诊断；用户已批准提交与归档，功能提交 acd25c3 已完成"
+  }
+}
