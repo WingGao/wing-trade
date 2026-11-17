@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
+from pydantic import ConfigDict, Field, model_validator
+
 from app.domain.enums import MatchingMethod
 
 from .common import APIModel
@@ -47,6 +49,31 @@ class SellTradeRequest(SellPreviewRequest):
 
 class VoidTradeRequest(APIModel):
     reason: str | None = None
+
+
+class TradeUpdateRequest(APIModel):
+    """仅接收可更正的成交字段，省略与显式空值具有不同语义。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revision: int = Field(ge=1, strict=True)
+    executed_at: datetime | None = None
+    qty: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
+    price: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
+    commission: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    stamp_duty: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    transfer_fee: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    other_fee: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    memo: str | None = None
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def reject_null_accounting_fields(self) -> TradeUpdateRequest:
+        """账务字段不能清空；备注可用 null 清空，未传字段保持原值。"""
+        for name in self.model_fields_set - {"memo", "reason"}:
+            if getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
 
 
 class TradeRead(APIModel):

@@ -109,6 +109,9 @@ export interface LotsRead {
   quote?: Quote | null
   currency?: Currency
   closedTradeDetails?: SettledTradeDetail[]
+  accountId?: string
+  strategyId?: string
+  needsRefresh?: boolean
 }
 
 export interface SettledTradeDetail {
@@ -147,6 +150,11 @@ export interface Trade {
   price: string
   grossAmount: string
   feesTotal: string
+  commission: string
+  stampDuty: string
+  transferFee: string
+  otherFee: string
+  revision: number
   status: string
   clientRequestId?: string | null
   memo?: string | null
@@ -154,6 +162,39 @@ export interface Trade {
   market?: string | null
   symbol?: string | null
   name?: string | null
+}
+
+export interface TradeUpdate {
+  revision: number
+  executedAt?: string
+  qty?: string
+  price?: string
+  commission?: string
+  stampDuty?: string
+  transferFee?: string
+  otherFee?: string
+  memo?: string | null
+  reason?: string
+}
+
+export interface TradeUpdateRead {
+  trade: Trade
+  needsRefresh: boolean
+}
+
+export interface PositionRefreshScope {
+  accountId: string
+  securityId: string
+  strategyId?: string
+  market?: string | null
+  symbol?: string | null
+  name?: string | null
+}
+
+export interface RecalculationRead {
+  rebuiltLots: number
+  rebuiltMatches: number
+  needsRefresh?: boolean
 }
 
 export interface AnalyticsSummary {
@@ -179,6 +220,7 @@ export interface DashboardPosition extends Position {
   quote: Quote | null
   unrealizedReturnPct: string | null
   lowestPriceGroup: LowestPriceGroup | null
+  needsRefresh?: boolean
 }
 
 export interface DashboardSummary extends AnalyticsSummary {
@@ -201,6 +243,7 @@ export interface DashboardRead {
   positions: DashboardPosition[]
   summary: DashboardSummary
   quotes: Quote[]
+  pendingRefreshScopes?: PositionRefreshScope[]
 }
 
 export interface SellPreviewMatch {

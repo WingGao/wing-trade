@@ -64,3 +64,65 @@ result = RecalculationService(session).rebuild(
     account_id=account_id, security_id=security_id, strategy_id=strategy_id
 )
 ```
+
+## 8. 交易编辑与持久化待刷新
+
+### 8.1 适用范围
+
+交易事实编辑、待刷新状态、Dashboard/个股读取及派生重建涉及同一跨层契约。编辑与重算是两个独立请求，不能把重算失败理解为编辑也已回滚。
+
+### 8.2 签名与存储
+
+- `PATCH /api/v1/trades/{tradeId}`：按原 `revision` 更正有效成交，返回 `{trade: TradeRead, needsRefresh: boolean}`。
+- `TradeLedgerService.edit_trade(...)`：更新事实、版本、审计和标记；路由拥有写事务，调用服务时不提前提交。
+- `PositionRefreshState` / `position_refresh_states` 按 `account_id + security_id + strategy_id` 命名唯一，迁移为 `0003_position_refresh_states`。
+- 继续使用既有 `POST /api/v1/securities/{id}/recalculate?accountId=&strategyId=`，不新建重算算法。
+
+### 8.3 请求、响应与事务契约
+
+- `revision` 必填；仅允许变更 `executedAt`、`qty`、`price`、`commission`、`stampDuty`、`transferFee`、`otherFee`、`memo`，另可带审计 `reason`。
+- 未提供字段保留原值；`memo:null` 清空备注，非空账务字段不接受显式 null。账户、证券、策略、方向、来源、幂等键及合计均不可写。
+- 数量、价格、费用保持既有 Decimal 规整和有限值校验；时间按 UTC 比较，不能用展示精度或浮点重算事实。
+- 标准化后等值提交不追加版本/审计、不改变既有标记；实际修改递增版本并保存前后值审计，与置标记同事务提交或同退。
+- 无状态行按未待刷新读取，GET 不建行；状态独立于可被重建的批次和周期。仅改备注也须标记，页面重载和重建数据库会话后仍可读。
+- Dashboard 每个 position 带 `needsRefresh`，顶层 `pendingRefreshScopes` 包含当前快照账户所有待刷新范围的 `accountId/securityId/strategyId/market/symbol/name`，不受已结清开关或有无活动行影响。
+- lots 响应带当前范围 `accountId/strategyId/needsRefresh`，没有批次也返回。首页按快照账户与行策略操作，省略参数的默认账户/策略不能替代明确范围。
+- 重建完整成功后同事务清目标标记；失败保留已提交编辑、旧派生数据、显式止盈和标记。行情读取、新增/撤销均不得误清标记。
+- SQLite 的编辑和重算继续在 `BEGIN IMMEDIATE` 写事务中串行；重算之后再发生编辑时标记重新为真，前端不能据旧重算响应自行清除。
+
+### 8.4 校验与错误矩阵
+
+| 条件 | 必须结果 |
+|---|---|
+| 不存在的交易 | `TRADE_NOT_FOUND` 404，数据库不变 |
+| 已撤销交易 | `TRADE_NOT_EDITABLE` 409，不能产生部分审计 |
+| 过期 revision | `TRADE_REVISION_CONFLICT` 409，不能覆盖已有事实 |
+| 归属/来源/派生字段、非法数值/时间/null | `VALIDATION_ERROR` 422，整个编辑回滚 |
+| 保存时状态或审计失败 | 交易、审计、标记同时回滚 |
+| 编辑后历史无前序买入或超卖 | 允许保存合法单笔事实；显式重算失败，旧派生结果和待刷新标记保留 |
+| 其他账户/证券/策略重算 | 不改变本范围标记 |
+
+### 8.5 正常、边界与错误示例
+
+- 正常：修改买入价后先看到原持仓及待刷新；主动重算后成本和相关卖出收益更新，仅清目标范围标记。
+- 边界：全部批次已结清，编辑历史成交后仍出现在待刷新清单；连续更正多笔后可统一重算。
+- 错误：撤销再新增来伪装编辑、GET 建状态行、把标记挂在 Security 或 Lot 上、刷新行情清标记。
+- 兼容：显式止盈按既有重算规则恢复，保存的目标价和计划量不自动重估；编辑后的相关界面提醒核对。
+
+### 8.6 必须测试
+
+覆盖 ACTIVE 买卖、不可编辑记录、全部字段及精度、版本冲突、白名单/null、等值提交、前后审计、保存与标记同进同退；临时文件库重建 engine/session 验证持久化；同股多账户/策略、无批次、隐藏已结清及 GET 零写入；重算成功/失败、重复重建、事实更新时间和止盈恢复。迁移升降级仅使用隔离库，断言旧事实和审计逐列不变，禁止操作真实 `ledger.db`。
+
+### 8.7 错误与正确写法
+
+错误：向编辑接口发送只读归属或直接指定计算结果。
+
+```json
+{"revision":1,"securityId":"another-security","grossAmount":"100.0000"}
+```
+
+正确：只提交发生变化的原始精度字段，由后端重新计算金额并标记待刷新。
+
+```json
+{"revision":1,"price":"10.123456","memo":null}
+```

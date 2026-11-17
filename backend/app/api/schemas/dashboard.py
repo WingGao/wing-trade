@@ -45,6 +45,7 @@ class DashboardPositionRead(APIModel):
     name: str | None = None
     currency: str | None = None
     strategy_id: str
+    needs_refresh: bool = False
     remaining_qty: Decimal
     remaining_cost: Decimal
     average_cost: Decimal
@@ -75,6 +76,17 @@ class DashboardSummaryRead(APIModel):
     stale_open_positions: int
 
 
+class PendingRefreshScopeRead(APIModel):
+    """无活动批次时仍可定位重算的账户、证券和策略范围。"""
+
+    account_id: str
+    security_id: str
+    strategy_id: str
+    market: str
+    symbol: str
+    name: str | None = None
+
+
 class DashboardRead(APIModel):
     """首页账务、持仓、行情和汇总的一致读取模型。"""
 
@@ -84,5 +96,6 @@ class DashboardRead(APIModel):
     market_session_open: bool
     poll_after_seconds: Literal[10, 60]
     positions: list[DashboardPositionRead] = Field(default_factory=list)
+    pending_refresh_scopes: list[PendingRefreshScopeRead] = Field(default_factory=list)
     summary: DashboardSummaryRead
     quotes: list[QuoteRead] = Field(default_factory=list)

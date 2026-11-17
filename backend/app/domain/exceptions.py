@@ -56,6 +56,18 @@ class TradeNotFoundError(DomainError):
     code = "TRADE_NOT_FOUND"
 
 
+class TradeRevisionConflictError(DomainError):
+    """拒绝覆盖用户打开表单后已被修改的交易。"""
+
+    code = "TRADE_REVISION_CONFLICT"
+
+
+class TradeNotEditableError(DomainError):
+    """已撤销的原始成交不允许继续编辑。"""
+
+    code = "TRADE_NOT_EDITABLE"
+
+
 class EntityNotFoundError(DomainError):
     code = "NOT_FOUND"
 

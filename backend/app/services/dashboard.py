@@ -23,6 +23,7 @@ from app.models.ledger import (
 )
 from app.services.accounting import AccountingService
 from app.services.cycle import CycleService
+from app.services.position_refresh import PositionRefreshService
 
 DashboardMode = Literal["cache", "auto", "manual"]
 
@@ -45,7 +46,7 @@ class DashboardService:
         mode: DashboardMode = "auto",
         now: datetime | None = None,
     ) -> dict[str, Any]:
-        """按指定模式构建一次一致的首页响应。"""
+        """按指定模式构建含持久待刷新状态的一次首页快照。"""
         current = self._as_utc(now or datetime.now(UTC))
         account = session.get(Account, account_id)
         if account is None:
@@ -75,6 +76,11 @@ class DashboardService:
                 groups.items(), key=lambda item: self._group_sort_key(session, item[0])
             )
         ]
+        pending_scopes = PositionRefreshService.pending_scopes(session, account_id)
+        pending_keys = {(scope["securityId"], scope["strategyId"]) for scope in pending_scopes}
+        for position in positions:
+            key = (position["securityId"], position["strategyId"])
+            position["needsRefresh"] = key in pending_keys
         summary = self._summary_data(
             session,
             account=account,
@@ -88,6 +94,7 @@ class DashboardService:
             "marketSessionOpen": session_open,
             "pollAfterSeconds": 10 if session_open else 60,
             "positions": positions,
+            "pendingRefreshScopes": pending_scopes,
             "summary": summary,
             "quotes": [
                 self._quote_data(security, snapshots_by_symbol.get(self._security_symbol(security)))

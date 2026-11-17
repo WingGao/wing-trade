@@ -29,6 +29,12 @@ export const useLedgerStore = defineStore('ledger', () => {
   let pendingRequests = 0
   let activeAutoRequest: ActiveAutoRequest | null = null
 
+  /** 写入前后失效旧快照响应，防止复用或接收写入前读取的在途请求。 */
+  function invalidateDashboard() {
+    requestSequence += 1
+    activeAutoRequest = null
+  }
+
   /** 将新旧调用参数统一成完整的首页加载选项。 */
   function normalizeOptions(options: DashboardLoadOptions | boolean): Required<Omit<DashboardLoadOptions, 'accountId'>> & Pick<DashboardLoadOptions, 'accountId'> {
     if (typeof options === 'boolean') {
@@ -90,5 +96,5 @@ export const useLedgerStore = defineStore('ledger', () => {
     trades.value = await api.trades()
   }
 
-  return { dashboard, positions, summary, trades, loading, error, loadDashboard, loadTrades }
+  return { dashboard, positions, summary, trades, loading, error, loadDashboard, loadTrades, invalidateDashboard }
 })

@@ -1,4 +1,4 @@
-import type { Account, AnalyticsSummary, ApiError, DashboardMode, DashboardRead, IntradayRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, Security, SecurityCandidate, SellPreview, Trade } from './types'
+import type { Account, AnalyticsSummary, ApiError, DashboardMode, DashboardRead, IntradayRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
@@ -38,14 +38,16 @@ export const api = {
   intraday: (securityId: string) => request<IntradayRead>(`/securities/${securityId}/intraday`),
   createSecurity: (payload: Record<string, unknown>) => request<Security>('/securities', { method: 'POST', body: JSON.stringify(payload) }),
   /** 读取同一行情切片下的批次、浮盈和继承止盈目标。 */
-  lots: (securityId: string, includeClosed = false, accountId?: string) => request<LotsRead>(`/securities/${securityId}/lots?${query({ includeClosed, accountId })}`),
-  /** 在指定账户范围内从原始交易重新构造个股派生批次。 */
-  recalculate: (securityId: string, accountId?: string) => request<{ rebuiltLots: number; rebuiltMatches: number }>(`/securities/${securityId}/recalculate?${query({ accountId })}`, { method: 'POST' }),
+  lots: (securityId: string, includeClosed = false, accountId?: string, strategyId?: string) => request<LotsRead>(`/securities/${securityId}/lots?${query({ includeClosed, accountId, strategyId })}`),
+  /** 在指定账户、个股和策略范围内从原始交易重新构造派生批次。 */
+  recalculate: (securityId: string, accountId?: string, strategyId?: string) => request<RecalculationRead>(`/securities/${securityId}/recalculate?${query({ accountId, strategyId })}`, { method: 'POST' }),
   /** 读取全局或个股明确保存的止盈设置。 */
   profitSetting: (securityId?: string) => request<ProfitSetting | null>(securityId ? `/securities/${securityId}/profit-settings` : '/profit-settings'),
   /** 保存本层止盈设置，空收益率表示清除本层覆盖。 */
   saveProfitSetting: (payload: { targetReturnPct: string | null; calculationBasis: 'NET' | 'GROSS'; alertEnabled: boolean }, securityId?: string) => request<ProfitSetting | null>(securityId ? `/securities/${securityId}/profit-settings` : '/profit-settings', { method: 'PUT', body: JSON.stringify(payload) }),
   trades: () => request<Trade[]>('/trades'),
+  /** 按原版本更正成交字段，不直接替换派生持仓。 */
+  updateTrade: (id: string, payload: TradeUpdate) => request<TradeUpdateRead>(`/trades/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   cycles: (securityId?: string) => request<unknown[]>(`/cycles?${query({ securityId, includeClosed: true })}`),
   previewSell: (payload: Record<string, unknown>) => request<SellPreview>('/trades/sell/preview', { method: 'POST', body: JSON.stringify(payload) }),
   buy: (payload: Record<string, unknown>) => request<Trade>('/trades/buy', { method: 'POST', body: JSON.stringify(payload) }),

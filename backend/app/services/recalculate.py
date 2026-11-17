@@ -14,6 +14,7 @@ from app.domain.precision import round_amount, round_price, round_qty
 from app.models.ledger import Cycle, Lot, ProfitTarget, Trade, TradeMatch
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
+from app.services.position_refresh import PositionRefreshService
 
 
 def _utc(value: datetime) -> datetime:
@@ -35,7 +36,7 @@ class RecalculationService:
         self.audit = TradeLedgerService(session, actor=actor)
 
     def rebuild(self, *, account_id: str, security_id: str, strategy_id: str) -> dict[str, int]:
-        """只重建给定账户、证券和策略，保留交易事实与显式批次设置。"""
+        """重建给定范围并原子清除待刷新标记，保留交易事实与显式批次设置。"""
         session = self.session
         scope = (account_id, security_id, strategy_id)
         trades = list(
@@ -241,5 +242,8 @@ class RecalculationService:
                     before={"cycle_id": original_trade_cycles[trade.id]},
                     after={"cycle_id": trade.cycle_id},
                 )
+        PositionRefreshService.clear(
+            session, account_id=account_id, security_id=security_id, strategy_id=strategy_id
+        )
         session.flush()
         return {"rebuiltLots": len(rebuilt), "rebuiltMatches": match_count}

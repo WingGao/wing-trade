@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { Account, Currency, DashboardMode, DashboardPosition, Lot, Security, SecurityCandidate, ValuationStatus } from '../api/types'
+import type { Account, Currency, DashboardMode, DashboardPosition, Lot, PositionRefreshScope, Security, SecurityCandidate, ValuationStatus } from '../api/types'
 import { useLedgerStore } from '../stores/ledger'
 import { usePreferencesStore } from '../stores/preferences'
 import { api } from '../api/client'
@@ -11,6 +11,7 @@ import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
 import { formatDateTime, formatMoney, formatPercent, formatQuantity, trendClass, valuationStatusLabel } from '../utils/format'
+import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
 
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
@@ -34,12 +35,28 @@ const buyVisible = ref(false)
 const sellVisible = ref(false)
 const pageAlive = ref(false)
 const manualRefreshing = ref(false)
+const activeMutations = ref(0)
+const mutationActive = computed(() => activeMutations.value > 0)
+/** 合并服务端待刷新清单与行状态，旧响应仍可按行提供入口。 */
+const pendingScopes = computed(() => {
+  const scopes = new Map<string, PositionRefreshScope>()
+  for (const scope of dashboard.value?.pendingRefreshScopes ?? []) scopes.set(`${scope.securityId}|${scope.strategyId ?? ''}`, scope)
+  for (const position of positions.value) {
+    if (position.needsRefresh && dashboard.value) {
+      const scope = { ...position, accountId: dashboard.value.accountId }
+      scopes.set(`${scope.securityId}|${scope.strategyId}`, scope)
+    }
+  }
+  return [...scopes.values()]
+})
+const unlistedScopes = computed(() => pendingScopes.value.filter((scope) => !positions.value.some((position) => position.securityId === scope.securityId && position.strategyId === scope.strategyId)))
 const selectedAccount = computed(() => accounts.value.find((account) => account.id === selectedAccountId.value))
 const accountMatchesSecurity = computed(() => !selectedSecurity.value || selectedAccount.value?.currency === requiredCurrency.value)
 const requiredCurrency = computed<'CNY' | 'USD'>(() => selectedSecurity.value?.currency ?? (selectedSecurity.value?.market === 'US' ? 'USD' : 'CNY'))
 
 let pollTimer: number | null = null
 let responseGeneration = 0
+let queryGeneration = 0
 let searchGeneration = 0
 
 /** 请求失败时保留上一份一致快照，但将最新状态降级为过期参考估值。 */
@@ -128,7 +145,7 @@ function clearPollTimer() {
 /** 按服务器返回的间隔安排下一次自动估值，避免前端推断市场时区。 */
 function schedulePoll(seconds: number | undefined) {
   clearPollTimer()
-  if (!pageAlive.value || document.hidden) return
+  if (!pageAlive.value || document.hidden || mutationActive.value) return
   const parsed = Number(seconds)
   const delaySeconds = Number.isFinite(parsed) ? Math.max(1, parsed) : 60
   pollTimer = window.setTimeout(() => {
@@ -138,17 +155,20 @@ function schedulePoll(seconds: number | undefined) {
 }
 
 /** 通过同一首页接口加载整份估值，并用代次防止旧响应覆盖新选择。 */
-async function loadValuation(mode: DashboardMode, reportSuccess = false, scheduleNext = true) {
+async function loadValuation(mode: DashboardMode, reportSuccess = false, scheduleNext = true, afterWrite = false) {
+  if (mutationActive.value && !afterWrite) return null
   const requestId = ++responseGeneration
   clearPollTimer()
   const result = await ledger.loadDashboard({
+    accountId: dashboard.value?.accountId,
     includeClosed: preferences.includeClosed,
     mode,
-    reuse: mode === 'auto',
+    reuse: mode === 'auto' && !afterWrite,
   })
-  if (!pageAlive.value || requestId !== responseGeneration) return
+  if (!pageAlive.value || requestId !== responseGeneration) return null
   if (scheduleNext) schedulePoll(result?.pollAfterSeconds)
   if (reportSuccess && result) ElMessage.success(mode === 'manual' ? '估值与行情刷新完成' : '首页数据已更新')
+  return result
 }
 
 /** 页面隐藏时暂停自动刷新，恢复可见后立即读取一次最新估值。 */
@@ -251,7 +271,8 @@ async function createAccountForCurrency(currency: 'CNY' | 'USD') {
 
 /** 记账成功后重载整份估值，同时保留“显示已结清”和当前批次选择。 */
 async function reloadQuickTrade() {
-  await loadValuation('auto')
+  ledger.invalidateDashboard()
+  await loadValuation('auto', false, true, true)
   if (selectedSecurity.value) {
     selectedLots.value = (await api.lots(selectedSecurity.value.id, false, selectedAccountId.value)).lots
   }
@@ -259,14 +280,46 @@ async function reloadQuickTrade() {
 
 /** 根据持仓内置证券标识打开详情页，不再依赖独立行情状态。 */
 async function openPosition(position: DashboardPosition) {
+  const account = dashboard.value?.accountId
   if (position.market && position.symbol) {
-    router.push(`/security/${position.market}/${position.symbol}`)
+    router.push({ path: `/security/${position.market}/${position.symbol}`, query: { accountId: account, strategyId: position.strategyId } })
     return
   }
   const securities = await api.securities()
   const security = securities.find((item) => item.id === position.securityId)
-  if (security) router.push(`/security/${security.market}/${security.symbol}`)
+  if (security && pageAlive.value && account === dashboard.value?.accountId) router.push({ path: `/security/${security.market}/${security.symbol}`, query: { accountId: account, strategyId: position.strategyId } })
   else ElMessage.warning('找不到证券基础信息')
+}
+
+/** 将行操作绑定看板快照账户，而不是快速记账选择器中的账户。 */
+function rowScope(position: DashboardPosition): PositionRefreshScope {
+  return { accountId: dashboard.value?.accountId ?? '', securityId: position.securityId, strategyId: position.strategyId, market: position.market, symbol: position.symbol, name: position.name }
+}
+
+/** 在刷新前后失效旧读取，统一处理确认、防重和服务端状态重读。 */
+async function recalculate(scope: PositionRefreshScope) {
+  if (!scope.accountId) return
+  const account = dashboard.value?.accountId
+  let started = false
+  await refreshPosition(scope, {
+    isCurrent: () => pageAlive.value && account === dashboard.value?.accountId,
+    invalidate: () => {
+      if (!started) { started = true; activeMutations.value += 1 }
+      responseGeneration += 1
+      clearPollTimer()
+      ledger.invalidateDashboard()
+    },
+    reload: async () => {
+      // 过滤条件变化只替代读取，不取消已提交的重算；稳定后再报告读取结果。
+      while (pageAlive.value && account === dashboard.value?.accountId) {
+        const query = queryGeneration
+        const result = await loadValuation('auto', false, false, true)
+        if (query === queryGeneration) return Boolean(result)
+      }
+      return false
+    },
+    settled: () => { activeMutations.value -= 1; schedulePoll(dashboard.value?.pollAfterSeconds) },
+  })
 }
 
 /** 首次进入先显示缓存，再请求自动估值，并注册页面生命周期。 */
@@ -276,7 +329,14 @@ async function initializePage() {
 }
 
 watch(() => preferences.includeClosed, () => {
-  if (pageAlive.value) void loadValuation('auto')
+  queryGeneration += 1
+  if (!pageAlive.value) return
+  if (mutationActive.value) {
+    responseGeneration += 1
+    ledger.invalidateDashboard()
+    return
+  }
+  void loadValuation('auto')
 })
 
 onMounted(() => {
@@ -289,6 +349,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   pageAlive.value = false
   responseGeneration += 1
+  ledger.invalidateDashboard()
   clearPollTimer()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
@@ -301,7 +362,7 @@ onBeforeUnmount(() => {
       <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
       <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
       <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
-      <el-button type="primary" :loading="manualRefreshing" @click="refresh">刷新行情</el-button>
+      <el-button type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新行情</el-button>
     </div>
   </section>
 
@@ -349,6 +410,11 @@ onBeforeUnmount(() => {
 
   <el-card class="panel">
     <template #header><div class="panel-title">活动仓位 <span class="muted">{{ dashboard?.summary.totalOpenPositions ?? 0 }} 个未结清持仓</span></div></template>
+    <el-alert v-if="pendingScopes.length" type="warning" :closable="false" show-icon class="status-alert" title="需要刷新：部分交易流水已更正，相关持仓、收益及账户汇总尚未重新核算。" />
+    <div v-for="scope in unlistedScopes" :key="`${scope.accountId}|${scope.securityId}|${scope.strategyId}`" class="pending-refresh-scope">
+      <span><strong>{{ scope.market }}:{{ scope.symbol }}</strong> {{ scope.name ?? '' }} · 当前无活动仓位 · 需要刷新</span>
+      <el-button type="warning" :loading="isPositionRefreshing(scope)" @click="recalculate(scope)">刷新持仓</el-button>
+    </div>
     <el-table :data="positions" v-loading="ledger.loading" stripe empty-text="暂无持仓" class="position-table">
       <el-table-column label="证券" min-width="180">
         <template #default="{ row }"><a class="security-link" href="#" @click.prevent="openPosition(row)"><strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong><span v-if="row.name" class="position-name">{{ row.name }}</span></a></template>
@@ -370,6 +436,7 @@ onBeforeUnmount(() => {
         </template>
       </el-table-column>
       <el-table-column label="策略回本参考价" min-width="135"><template #default="{ row }">{{ formatMoney(row.strategyBreakevenPrice, row.currency ?? dashboardCurrency) }}</template></el-table-column>
+      <el-table-column label="持仓核算" width="150" fixed="right"><template #default="{ row }"><div v-if="row.needsRefresh"><el-tag type="warning">需要刷新</el-tag><el-button link type="warning" :loading="isPositionRefreshing(rowScope(row))" @click="recalculate(rowScope(row))">刷新持仓</el-button></div><span v-else class="muted">—</span></template></el-table-column>
     </el-table>
   </el-card>
 
@@ -391,4 +458,5 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dashboard-metrics { grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
+.pending-refresh-scope { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; flex-wrap: wrap; }
 </style>

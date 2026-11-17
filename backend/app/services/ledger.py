@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
-from datetime import datetime, timezone
+from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.domain.enums import MatchingMethod, TradeSide, TradeSource, TradeStatus
 from app.domain.exceptions import (
     LotHasActiveMatchesError,
+    TradeNotEditableError,
     TradeNotFoundError,
+    TradeRevisionConflictError,
     ValidationError,
 )
 from app.domain.models import Fees, MatchRequest
@@ -20,6 +22,7 @@ from app.models.ledger import AuditEvent, Lot, Trade, TradeMatch
 from app.services.accounting import AccountingService
 from app.services.cycle import CycleService
 from app.services.matching import MatchingService
+from app.services.position_refresh import PositionRefreshService
 
 
 class TradeLedgerService:
@@ -332,6 +335,117 @@ class TradeLedgerService:
         return trade
 
     record_sell = sell
+
+    @staticmethod
+    def _trade_edit_snapshot(trade: Trade) -> dict[str, object]:
+        """将完整可编辑事实规整为可比较和可审计的快照。"""
+        executed_at = trade.executed_at
+        normalized = (
+            executed_at.replace(tzinfo=UTC)
+            if executed_at.tzinfo is None
+            else executed_at.astimezone(UTC)
+        )
+        return {
+            "executed_at": normalized.isoformat(),
+            "qty": trade.qty,
+            "price": trade.price,
+            "commission": trade.commission,
+            "stamp_duty": trade.stamp_duty,
+            "transfer_fee": trade.transfer_fee,
+            "other_fee": trade.other_fee,
+            "memo": trade.memo,
+            "gross_amount": trade.gross_amount,
+            "fees_total": trade.fees_total,
+        }
+
+    def edit_trade(
+        self,
+        trade_id: str,
+        *,
+        revision: int,
+        changes: Mapping[str, object],
+        reason: str | None = None,
+        commit: bool = True,
+    ) -> Trade:
+        """原子更正原交易及待刷新状态，保留 ID 和旧派生结果直至主动重算。"""
+        trade = self.session.get(Trade, trade_id)
+        if trade is None:
+            raise TradeNotFoundError(f"trade {trade_id} was not found")
+        if trade.status != TradeStatus.ACTIVE.value:
+            raise TradeNotEditableError("已撤销的交易不可编辑")
+        if trade.revision != revision:
+            raise TradeRevisionConflictError(
+                "交易已被修改，请重新加载后编辑", details={"revision": trade.revision}
+            )
+        editable = {
+            "executed_at", "qty", "price", "commission", "stamp_duty",
+            "transfer_fee", "other_fee", "memo",
+        }
+        if set(changes) - editable:
+            raise ValidationError("包含不可编辑的交易字段")
+        if any(value is None and name != "memo" for name, value in changes.items()):
+            raise ValidationError("成交字段不能为空")
+        executed_at = changes.get("executed_at", trade.executed_at)
+        if not isinstance(executed_at, datetime):
+            raise ValidationError("成交时间无效")
+        executed_at = (
+            executed_at.replace(tzinfo=UTC)
+            if executed_at.tzinfo is None
+            else executed_at.astimezone(UTC)
+        )
+        memo = changes.get("memo", trade.memo)
+        if memo is not None and not isinstance(memo, str):
+            raise ValidationError("备注必须是文本或空值")
+        fees = self._fees(None, {
+            name: changes.get(name, getattr(trade, name))
+            for name in ("commission", "stamp_duty", "transfer_fee", "other_fee")
+        })
+        calculate = (
+            AccountingService.calculate_buy
+            if trade.side == TradeSide.BUY.value
+            else AccountingService.calculate_sell
+        )
+        calculation = calculate(
+            changes.get("qty", trade.qty), changes.get("price", trade.price), fees
+        )
+        before = self._trade_edit_snapshot(trade)
+        after: dict[str, object] = {
+            "executed_at": executed_at.isoformat(),
+            "qty": calculation.qty,
+            "price": calculation.price,
+            "commission": fees.commission,
+            "stamp_duty": fees.stamp_duty,
+            "transfer_fee": fees.transfer_fee,
+            "other_fee": fees.other_fee,
+            "memo": memo,
+            "gross_amount": calculation.gross,
+            "fees_total": fees.total,
+        }
+        if before == after:
+            return trade
+        original_revision = trade.revision
+        trade.executed_at = executed_at
+        trade.qty = calculation.qty
+        trade.price = calculation.price
+        trade.gross_amount = calculation.gross
+        trade.commission = fees.commission
+        trade.stamp_duty = fees.stamp_duty
+        trade.transfer_fee = fees.transfer_fee
+        trade.other_fee = fees.other_fee
+        trade.fees_total = fees.total
+        trade.memo = memo
+        trade.revision += 1
+        self._audit(
+            "TRADE", trade.id, "TRADE_UPDATED",
+            before={**before, "revision": original_revision},
+            after={**after, "revision": trade.revision}, reason=reason,
+        )
+        PositionRefreshService.mark(
+            self.session, account_id=trade.account_id,
+            security_id=trade.security_id, strategy_id=trade.strategy_id,
+        )
+        self._finish(commit=commit)
+        return trade
 
     def void_trade(self, trade_id: str, *, reason: str | None = None, commit: bool = True) -> Trade:
         trade = self.session.get(Trade, trade_id)

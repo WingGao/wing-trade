@@ -4,11 +4,18 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, ExactDecimal
-from app.domain.enums import CalcBasis, CycleStatus, LotStatus, TargetStatus, TradeSide, TradeSource, TradeStatus
+from app.domain.enums import (
+    CalcBasis,
+    CycleStatus,
+    LotStatus,
+    TargetStatus,
+    TradeSource,
+    TradeStatus,
+)
 
 
 def _uuid() -> str:
@@ -66,6 +73,33 @@ class Strategy(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     account: Mapped[Account] = relationship(back_populates="strategies")
+
+
+class PositionRefreshState(Base):
+    """独立于派生批次保存账户、证券和策略的待重算状态。"""
+
+    __tablename__ = "position_refresh_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id", "security_id", "strategy_id", name="uq_position_refresh_states_scope"
+        ),
+        Index("ix_position_refresh_states_account_pending", "account_id", "needs_refresh"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    security_id: Mapped[str] = mapped_column(
+        ForeignKey("securities.id", ondelete="CASCADE"), nullable=False
+    )
+    strategy_id: Mapped[str] = mapped_column(
+        ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False
+    )
+    needs_refresh: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class Cycle(Base):

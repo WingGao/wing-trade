@@ -26,6 +26,7 @@ from app.api.schemas.trade import (
     MatchRequestRead,
     SellPreviewRequest,
     SellTradeRequest,
+    TradeUpdateRequest,
     VoidTradeRequest,
 )
 from app.api.utils import begin_write, fees_from, finish_write
@@ -54,6 +55,7 @@ from app.services.cycle import CycleService
 from app.services.dashboard import DashboardService
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
+from app.services.position_refresh import PositionRefreshService
 from app.services.profit_settings import ProfitSettingsService
 from app.services.recalculate import RecalculationService
 from app.services.target import TargetService
@@ -530,6 +532,34 @@ def record_sell(payload: SellTradeRequest, actor: str | None = Depends(request_a
         raise
 
 
+@router.patch("/trades/{trade_id}")
+def edit_trade(
+    trade_id: str,
+    payload: TradeUpdateRequest,
+    actor: str | None = Depends(request_actor),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """更正原始流水并原子标记范围待刷新，不在保存时重算。"""
+    begin_write(session)
+    try:
+        trade = TradeLedgerService(session, actor=actor).edit_trade(
+            trade_id,
+            revision=payload.revision,
+            changes=payload.model_dump(exclude_unset=True, exclude={"revision", "reason"}),
+            reason=payload.reason,
+            commit=False,
+        )
+        pending = PositionRefreshService.needs_refresh(
+            session, account_id=trade.account_id,
+            security_id=trade.security_id, strategy_id=trade.strategy_id,
+        )
+        finish_write(session, True)
+        return {"trade": trade_data(trade), "needsRefresh": pending}
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
 @router.post("/trades/{trade_id}/void")
 def void_trade(trade_id: str, payload: VoidTradeRequest | None = None, actor: str | None = Depends(request_actor), session: Session = Depends(get_db)) -> dict[str, Any]:
     begin_write(session)
@@ -590,7 +620,7 @@ def list_lots(
     include_closed: bool = Query(default=False, alias="includeClosed"),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """倒序返回批次估值；开启结清显示时附上全部有效闭仓买卖分摊明细。"""
+    """倒序返回批次估值、范围待刷新状态及可选的闭仓买卖分摊明细。"""
     account = resolve_account(session, account_id)
     strategy = resolve_strategy(session, account, strategy_id)
     security = _security_or_404(session, security_id)
@@ -664,6 +694,11 @@ def list_lots(
         )
     return {
         "lots": rows,
+        "accountId": account,
+        "strategyId": strategy,
+        "needsRefresh": PositionRefreshService.needs_refresh(
+            session, account_id=account, security_id=security_id, strategy_id=strategy
+        ),
         "closedLotCount": len(closed),
         "realizedPnl": _fmt(realized),
         "quote": quote,

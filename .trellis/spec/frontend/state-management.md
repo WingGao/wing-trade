@@ -44,6 +44,7 @@ must point back to server state and must not reimplement accounting or matching.
 - 自动刷新按服务端 `pollAfterSeconds` 调度；标签页隐藏时暂停，恢复可见后立即刷新；卸载时清理计时器和监听器。
 - 自动刷新复用同查询的在途请求；手动刷新与自动刷新串行执行；旧代次响应不得覆盖新查询或新页面状态。
 - 快速买入/卖出成功后使用当前 `includeClosed` 重载整份 Dashboard，不只刷新行情或持仓子集。
+- 读取查询条件与账务操作范围分别管理代次：重算后的 GET 在途时切换 `includeClosed`，须立即使旧读取失效并重读最新条件，不能因写操作进行中而直接忽略开关变化。共享重算流程等待最新稳定查询；被主动替代的读取不当作网络失败，也不撤销同范围已在途的 POST。
 - `partial|unavailable` 时不展示局部账户总浮盈；`stale` 可展示带文字状态的参考估值；`null`、零和零涨幅必须区分。
 
 ### 4. Validation & Error Matrix

@@ -100,6 +100,11 @@ function makeTrade(): Trade {
     price: '10.000000',
     grossAmount: '1000.0000',
     feesTotal: '0.0000',
+    commission: '0.0000',
+    stampDuty: '0.0000',
+    transferFee: '0.0000',
+    otherFee: '0.0000',
+    revision: 1,
     status: 'ACTIVE',
   }
 }
