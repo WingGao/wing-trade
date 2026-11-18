@@ -2,7 +2,22 @@
 import type { Currency, Quote } from '../api/types'
 import { formatDateTime, formatMoney, formatSignedPercent, trendClass } from '../utils/format'
 
-const props = defineProps<{ quote?: Quote | null; currency?: Currency | null }>()
+const props = defineProps<{
+  quote?: Quote | null
+  currency?: Currency | null
+  displayValue?: string | null
+  compact?: boolean
+}>()
+
+/** 返回主展示值；传入 displayValue 时用于展示持仓总价值并保留三位现价回退。 */
+function displayedPrice(quote: Quote): string {
+  const hasDisplayValue = props.displayValue !== undefined
+  return formatMoney(
+    hasDisplayValue ? props.displayValue : quote.lastPrice,
+    quote.currency ?? props.currency,
+    hasDisplayValue ? 2 : 3,
+  )
+}
 
 /** 返回报价状态的文字，避免仅用颜色表达过期信息。 */
 function quoteStatusLabel(quote: Quote): string {
@@ -19,13 +34,30 @@ function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' {
 
 <template>
   <span v-if="quote" class="quote-inline">
-    <span class="quote-value-row">
-      <strong>{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, 3) }}</strong>
-      <span class="quote-currency">{{ quote.currency ?? props.currency ?? '币种未知' }}</span>
+    <span :class="['quote-value-row', { 'quote-value-row--compact': props.compact }]">
+      <strong>{{ displayedPrice(quote) }}</strong>
+      <span v-if="!props.compact" class="quote-currency">{{ quote.currency ?? props.currency ?? '币种未知' }}</span>
+      <span v-else class="quote-unit-price">{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, 3) }}</span>
       <span :class="['quote-change', trendClass(quote.changePct)]">{{ formatSignedPercent(quote.changePct) }}</span>
-      <el-tag :type="quoteStatusType(quote)" size="small">{{ quoteStatusLabel(quote) }}</el-tag>
+      <el-tooltip v-if="props.compact" placement="top" :show-after="150">
+        <template #content>
+          <div class="quote-tooltip">
+            <strong>报价更新信息</strong>
+            <span v-if="quote.provider">行情来源：{{ quote.provider }}</span>
+            <span v-if="quote.sourceTime">报价时间：{{ formatDateTime(quote.sourceTime) }}</span>
+            <span v-else>报价时间：未知</span>
+            <span v-if="quote.fetchedAt">获取时间：{{ formatDateTime(quote.fetchedAt) }}</span>
+            <span v-else>获取时间：未知</span>
+            <span v-if="props.displayValue !== undefined">当前价：{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, 3) }}</span>
+          </div>
+        </template>
+        <span class="quote-status-trigger" tabindex="0">
+          <el-tag :type="quoteStatusType(quote)" size="small">{{ quoteStatusLabel(quote) }}</el-tag>
+        </span>
+      </el-tooltip>
+      <el-tag v-else :type="quoteStatusType(quote)" size="small">{{ quoteStatusLabel(quote) }}</el-tag>
     </span>
-    <span class="quote-meta">
+    <span v-if="!props.compact" class="quote-meta">
       <span v-if="quote.provider">{{ quote.provider }}</span>
       <span v-if="quote.sourceTime">报价 {{ formatDateTime(quote.sourceTime) }}</span>
       <span v-else>报价时间未知</span>
@@ -34,3 +66,13 @@ function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' {
   </span>
   <span v-else class="unavailable">行情不可用</span>
 </template>
+
+<style scoped>
+.quote-value-row--compact { display:grid; grid-template-columns:auto auto auto; justify-content:start; }
+.quote-value-row--compact > strong { grid-column:1 / -1; }
+.quote-unit-price { color:#657287; font-size:12px; font-weight:600; }
+.quote-status-trigger { display:inline-flex; outline:none; }
+.quote-status-trigger:focus-visible { border-radius:4px; box-shadow:0 0 0 2px rgba(64, 158, 255, .35); }
+.quote-tooltip { display:flex; flex-direction:column; gap:3px; max-width:280px; line-height:1.45; white-space:normal; }
+.quote-tooltip strong { margin-bottom:2px; }
+</style>

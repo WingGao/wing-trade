@@ -198,6 +198,7 @@ test.describe('portfolio journal dashboard', () => {
     await expect(row).toContainText('-200.00')
     await expect(row).toContainText('¥ 10.00')
     await expect(row).toContainText('¥ 0.00')
+    await expect(row.locator('.lowest-group-meta')).toHaveText('2批150股1,200.00')
     expect(modes.slice(0, 2)).toEqual(['cache', 'auto'])
   })
 
@@ -262,6 +263,28 @@ test.describe('portfolio journal dashboard', () => {
     })
     await expect.poll(() => autoRequests).toBeGreaterThan(pausedCount)
     expect(maxActiveRequests).toBe(1)
+  })
+
+  test('sorts active positions by current change and defaults to descending', async ({ page }) => {
+    const positions = [
+      makePosition({ securityId: 'security-a', symbol: '600000', name: '浦发银行', quote: makeQuote({ securityId: 'security-a', symbol: 'SH:600000', changePct: '-2.000000' }), lowestPriceGroup: null }),
+      makePosition({ securityId: 'security-b', market: 'SZ', symbol: '000002', name: '万科A', quote: makeQuote({ securityId: 'security-b', symbol: 'SZ:000002', changePct: '3.000000' }), lowestPriceGroup: null }),
+      makePosition({ securityId: 'security-c', market: 'SZ', symbol: '300001', name: '特锐德', quote: null, unrealizedPnl: null, unrealizedReturnPct: null, lowestPriceGroup: null }),
+    ]
+    await mockAccounts(page)
+    await page.route('**/api/v1/dashboard**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(makeDashboard({ positions, quotes: positions.flatMap((position) => position.quote ? [position.quote] : []) })) }))
+
+    await page.goto('/dashboard')
+    const rows = page.locator('.position-table .el-table__row')
+    await expect(rows).toHaveCount(3)
+    await expect(rows.nth(0)).toContainText('SZ:000002')
+    await expect(rows.nth(1)).toContainText('SH:600000')
+    await expect(rows.nth(2)).toContainText('SZ:300001')
+
+    await page.getByRole('columnheader', { name: /当前总价值/ }).click()
+    await expect(rows.nth(0)).toContainText('SH:600000')
+    await expect(rows.nth(1)).toContainText('SZ:000002')
+    await expect(rows.nth(2)).toContainText('SZ:300001')
   })
 
   test('reloads the whole valuation after buy while preserving includeClosed', async ({ page }) => {
@@ -367,7 +390,7 @@ test.describe('portfolio journal dashboard', () => {
     await expect.poll(() => sellBodies.length).toBe(1)
     expect(sellBodies[0]).toMatchObject({ qty: '4.0000', matches: [{ lotId: 'lot-newer-1234567890', matchedQty: '4.0000' }] })
     const positionRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SH:600519' })
-    await expect(positionRow.locator('td').nth(1)).toHaveText('6')
+    await expect(positionRow.locator('.position-quantity')).toHaveText('6 股')
   })
 
   test('distinguishes zero, stale and unavailable values without showing a partial total', async ({ page }) => {

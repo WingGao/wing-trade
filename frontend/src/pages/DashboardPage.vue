@@ -10,13 +10,14 @@ import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
-import { formatDateTime, formatMoney, formatPercent, formatQuantity, trendClass, valuationStatusLabel } from '../utils/format'
+import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, trendClass, valuationStatusLabel } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
 
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
 const router = useRouter()
 const positions = computed(() => ledger.positions)
+const positionSortOrder = ref<'ascending' | 'descending'>('descending')
 const dashboard = computed(() => ledger.dashboard)
 const dashboardCurrency = computed<Currency | null>(() => dashboard.value?.currency ?? null)
 const securityKeyword = ref('')
@@ -53,6 +54,42 @@ const unlistedScopes = computed(() => pendingScopes.value.filter((scope) => !pos
 const selectedAccount = computed(() => accounts.value.find((account) => account.id === selectedAccountId.value))
 const accountMatchesSecurity = computed(() => !selectedSecurity.value || selectedAccount.value?.currency === requiredCurrency.value)
 const requiredCurrency = computed<'CNY' | 'USD'>(() => selectedSecurity.value?.currency ?? (selectedSecurity.value?.market === 'US' ? 'USD' : 'CNY'))
+
+/** 读取当前涨幅用于排序，无有效行情时返回空值。 */
+function positionChangeValue(position: DashboardPosition): number | null {
+  const value = Number(position.quote?.changePct)
+  return Number.isFinite(value) ? value : null
+}
+
+/** 按当前涨幅排列活动仓位，并将无有效行情的持仓始终放在末尾。 */
+const sortedPositions = computed(() => {
+  const direction = positionSortOrder.value === 'ascending' ? 1 : -1
+  return [...positions.value].sort((left, right) => {
+    const leftChange = positionChangeValue(left)
+    const rightChange = positionChangeValue(right)
+    if (leftChange === null && rightChange === null) return 0
+    if (leftChange === null) return 1
+    if (rightChange === null) return -1
+    return (leftChange - rightChange) * direction
+  })
+})
+
+/** 接收表格列排序变化并切换当前涨幅排序方向。 */
+function handlePositionSort({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
+  if (prop !== 'quote.changePct') return
+  positionSortOrder.value = order === 'ascending' ? 'ascending' : 'descending'
+}
+
+/** 按当前持仓数量和最新报价计算展示用总价值，缺少有效行情时返回空值。 */
+function currentPositionValue(position: DashboardPosition): string | null {
+  const price = position.quote?.lastPrice
+  if (price === null || price === undefined || price === '') return null
+  const quantity = Number(position.remainingQty)
+  const latestPrice = Number(price)
+  if (!Number.isFinite(quantity) || !Number.isFinite(latestPrice)) return null
+  const value = quantity * latestPrice
+  return Number.isFinite(value) ? value.toFixed(2) : null
+}
 
 let pollTimer: number | null = null
 let responseGeneration = 0
@@ -415,13 +452,14 @@ onBeforeUnmount(() => {
       <span><strong>{{ scope.market }}:{{ scope.symbol }}</strong> {{ scope.name ?? '' }} · 当前无活动仓位 · 需要刷新</span>
       <el-button type="warning" :loading="isPositionRefreshing(scope)" @click="recalculate(scope)">刷新持仓</el-button>
     </div>
-    <el-table :data="positions" v-loading="ledger.loading" stripe empty-text="暂无持仓" class="position-table">
+    <el-table :data="sortedPositions" :default-sort="{ prop: 'quote.changePct', order: 'descending' }" v-loading="ledger.loading" stripe empty-text="暂无持仓" class="position-table" @sort-change="handlePositionSort">
       <el-table-column label="证券" min-width="180">
         <template #default="{ row }"><a class="security-link" href="#" @click.prevent="openPosition(row)"><strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong><span v-if="row.name" class="position-name">{{ row.name }}</span></a></template>
       </el-table-column>
-      <el-table-column label="持股数" min-width="100"><template #default="{ row }">{{ formatQuantity(row.remainingQty) }}</template></el-table-column>
-      <el-table-column label="加权成本" min-width="120"><template #default="{ row }">{{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency) }}</template></el-table-column>
-      <el-table-column label="当前价 / 当日涨幅" min-width="220"><template #default="{ row }"><QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" /></template></el-table-column>
+      <el-table-column label="持仓" min-width="150">
+        <template #default="{ row }"><div class="position-holding"><strong class="position-quantity">{{ formatQuantity(row.remainingQty) }} 股</strong><span class="position-cost">加权成本 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency) }}</span></div></template>
+      </el-table-column>
+      <el-table-column prop="quote.changePct" label="当前总价值" min-width="220" sortable="custom" :sort-orders="['descending', 'ascending']"><template #default="{ row }"><QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact /></template></el-table-column>
       <el-table-column label="持仓浮盈" min-width="135">
         <template #default="{ row }"><div :class="['pnl-value', trendClass(row.unrealizedPnl)]">{{ formatMoney(row.unrealizedPnl, row.currency ?? dashboardCurrency) }}</div><div :class="['pnl-rate', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</div></template>
       </el-table-column>
@@ -429,7 +467,7 @@ onBeforeUnmount(() => {
         <template #default="{ row }">
           <div v-if="row.lowestPriceGroup" class="lowest-group">
             <div>共同买入价 <strong>{{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency) }}</strong></div>
-            <div class="muted">{{ row.lowestPriceGroup.lotCount }} 个批次 · 合计剩余 {{ formatQuantity(row.lowestPriceGroup.remainingQty) }} 股 · 成本 {{ formatMoney(row.lowestPriceGroup.remainingCost, row.currency ?? dashboardCurrency) }}</div>
+            <div class="lowest-group-meta"><span>{{ row.lowestPriceGroup.lotCount }}批</span><span>{{ formatQuantity(row.lowestPriceGroup.remainingQty) }}股</span><span>{{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}</span></div>
             <div :class="['group-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">组浮盈 {{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</div>
           </div>
           <span v-else class="muted">无符合条件的未结清批次</span>
@@ -459,4 +497,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .dashboard-metrics { grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
 .pending-refresh-scope { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; flex-wrap: wrap; }
+.position-holding { display: flex; flex-direction: column; gap: 3px; line-height: 1.45; }
+.position-quantity { color: #263244; }
+.position-cost { color: #7d899b; font-size: 12px; }
+.lowest-group-meta { display: flex; gap: 12px; margin: 2px 0; color: #7d899b; font-size: 12px; white-space: nowrap; }
 </style>

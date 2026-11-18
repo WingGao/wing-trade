@@ -173,7 +173,7 @@ test('活动仓位持久提示复用重算，行情刷新和取消均不清标�
   expect(state.recalculations[0]!.searchParams.get('accountId')).toBe(accountId)
   expect(state.recalculations[0]!.searchParams.get('strategyId')).toBe(strategyId)
   await expect(row).not.toContainText('需要刷新')
-  await expect(row.locator('td').nth(1)).toHaveText('200')
+  await expect(row.locator('.position-quantity')).toHaveText('200 股')
 })
 
 test('无活动仓位仍有刷新入口，详情导航保留快照账户和策略', async ({ page }) => {
