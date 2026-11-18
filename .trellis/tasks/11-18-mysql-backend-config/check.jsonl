@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"核对 MySQL 与 SQLite 的数据库契约和回归范围"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"核对测试、静态检查和边界条件"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"复核 .env、Compose、配置对象和引擎连接的端到端一致性"}

@@ -11,8 +11,15 @@ from app.config import settings
 
 
 def create_engine_for_url(database_url: str | None = None, *, echo: bool | None = None) -> Engine:
+    """创建带连接前探活的数据库引擎，并为 MySQL 启用连接回收。"""
     url = database_url or settings.database_url
-    kwargs: dict[str, object] = {"echo": settings.echo_sql if echo is None else echo, "future": True}
+    kwargs: dict[str, object] = {
+        "echo": settings.echo_sql if echo is None else echo,
+        "future": True,
+        "pool_pre_ping": True,
+    }
+    if url.startswith("mysql"):
+        kwargs["pool_recycle"] = 1800
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
         if url in {"sqlite://", "sqlite:///:memory:"}:

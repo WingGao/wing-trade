@@ -5,14 +5,19 @@ import time
 import uuid
 
 from fastapi import FastAPI, Request
-
-from app.api.errors import domain_error_handler, generic_error_handler, integrity_error_handler, validation_error_handler
-from app.api.v1.router import router
-from app.db.base import Base
-from app.db.session import engine, healthcheck
-from app.domain.exceptions import DomainError
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import IntegrityError
+
+from app.api.errors import (
+    domain_error_handler,
+    generic_error_handler,
+    integrity_error_handler,
+    validation_error_handler,
+)
+from app.api.v1.router import router
+from app.db.migrations import prepare_database_schema
+from app.db.session import engine, healthcheck
+from app.domain.exceptions import DomainError
 
 logger = logging.getLogger("ashare_ledger.api")
 
@@ -27,17 +32,27 @@ def create_app(*, create_tables: bool = True) -> FastAPI:
         try:
             response = await call_next(request)
         except Exception:
-            logger.exception("request failed", extra={"request_id": request_id, "path": request.url.path})
+            logger.exception(
+                "request failed", extra={"request_id": request_id, "path": request.url.path}
+            )
             raise
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         response.headers["x-request-id"] = request_id
-        logger.info("request completed", extra={"request_id": request_id, "path": request.url.path, "status_code": response.status_code, "duration_ms": elapsed_ms})
+        logger.info(
+            "request completed",
+            extra={
+                "request_id": request_id,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": elapsed_ms,
+            },
+        )
         return response
 
     @application.on_event("startup")
     def startup() -> None:
         if create_tables:
-            Base.metadata.create_all(engine)
+            prepare_database_schema(engine)
 
     @application.get("/health")
     def health() -> dict[str, str]:
@@ -61,4 +76,3 @@ def create_app(*, create_tables: bool = True) -> FastAPI:
 
 
 app = create_app()
-

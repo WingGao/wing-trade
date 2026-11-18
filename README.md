@@ -8,7 +8,44 @@
 docker compose up --build
 ```
 
-打开 <http://localhost:8080>；后端健康检查位于 <http://localhost:8000/ready>。SQLite 数据库持久化在 `./data/ashare_journal.db`，备份时停止服务后复制 `data/` 目录即可。
+打开 <http://localhost:8080>；后端健康检查位于 <http://localhost:8000/ready>。未配置 `.env` 时保持 SQLite 默认行为，数据库文件仍持久化在 `./data/ashare_journal.db`。
+
+## 数据库配置
+
+根目录 `.env` 只用于本机配置，该文件已被 `.gitignore` 忽略；可提交的脱敏模板是 `.env.example`。Docker Compose 会自动读取根目录 `.env`，且容器内会把 MySQL 主机切换到 Compose 服务名 `mysql`。
+
+切换 MySQL 8.4 时，复制模板并修改数据库名、用户和密码：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+MySQL 配置项如下：
+
+```bash
+COMPOSE_PROFILES=mysql
+DATABASE_BACKEND=mysql
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DATABASE=ashare_ledger
+MYSQL_USER=ashare
+MYSQL_PASSWORD='change-me@2026'
+```
+
+密码可直接填写，不需要手工做 URL 编码。`.env` 中包含特殊字符时，建议用单引号包裹。MySQL 数据保存在 Compose 命名卷 `mysql_data` 中；后端使用 PyMySQL、`utf8mb4`、连接前探活和 1800 秒连接回收。
+
+`COMPOSE_PROFILES=mysql` 只在 Docker Compose 中启用 MySQL 服务。改用 SQLite 时将 `COMPOSE_PROFILES` 留空并设置 `DATABASE_BACKEND=sqlite`，Compose 就不会启动或等待 MySQL。显式设置 `DATABASE_URL` 时优先级最高，会覆盖 `DATABASE_BACKEND` 与 `MYSQL_*` 组合配置。未设置 `DATABASE_BACKEND` 或设置为 `sqlite` 时，后端继续使用 SQLite；Compose 模式仍使用 `./data/ashare_journal.db`，直接运行后端时仍默认使用根目录 `ledger.db`。
+
+后端启动时会自动准备数据库结构：空库执行 `alembic upgrade head`，已版本化数据库升级尚未应用的 revision；旧版仅由 `create_all` 建立且没有 `alembic_version` 的数据库会先补齐缺失表并标记当前版本，不会删除、清空或重写既有账务数据。因此只配置根目录 `.env` 后运行 `docker compose up --build` 即可完成首次启动。
+
+如需在容器内手动检查或执行迁移：
+
+```bash
+docker compose run --rm backend alembic upgrade head
+```
+
+该命令是幂等的，后续结构升级也可使用。SQLite 数据不会自动迁移到 MySQL；切换前应停止服务并备份 `data/` 中的数据库文件。不要删除或清空现有 `ledger.db`，也不要让迁移命令指向错误数据库。
 
 ## 本地开发
 

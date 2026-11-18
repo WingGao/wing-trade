@@ -8,3 +8,6 @@ ledger.db*
 backend/**/__pycache__/
 __pycache__/
 *.pyc
+
+# 本地环境变量包含敏感信息，仅提交脱敏示例文件
+.env

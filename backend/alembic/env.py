@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
-from alembic import context
-from sqlalchemy import engine_from_config, pool
 
+from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import Connection
+
+from alembic import context
 from app.config import settings
-from app.models.ledger import Base  # noqa: F401
+from app.models.ledger import Base
 
 config = context.config
 if config.config_file_name is not None:
@@ -14,7 +16,15 @@ config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"
 target_metadata = Base.metadata
 
 
+def _run_migrations(connection: Connection) -> None:
+    # 在给定连接上执行迁移并统一事务边界。
+    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_offline() -> None:
+    # 离线模式直接使用当前配置生成迁移 SQL。
     context.configure(
         url=settings.database_url,
         target_metadata=target_metadata,
@@ -27,15 +37,19 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # 在线模式优先复用调用方传入的连接，否则按 CLI 配置创建连接。
+    supplied_connection = config.attributes.get("connection")
+    if isinstance(supplied_connection, Connection):
+        _run_migrations(supplied_connection)
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
-        with context.begin_transaction():
-            context.run_migrations()
+        _run_migrations(connection)
 
 
 if context.is_offline_mode():

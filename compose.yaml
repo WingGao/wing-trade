@@ -2,11 +2,22 @@ services:
   backend:
     build: ./backend
     environment:
-      DATABASE_URL: sqlite:////app/data/ashare_journal.db
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_BACKEND: ${DATABASE_BACKEND:-sqlite}
+      DATABASE_SQLITE_PATH: /app/data/ashare_journal.db
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ashare_ledger}
+      MYSQL_USER: ${MYSQL_USER:-ashare}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ashare_dev_password}
       QUOTE_PROVIDER: ${QUOTE_PROVIDER:-eastmoney}
       QUOTE_TIMEOUT_SECONDS: ${QUOTE_TIMEOUT_SECONDS:-5}
     volumes:
       - ./data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+        required: false
     ports:
       - "8000:8000"
     healthcheck:
@@ -14,6 +25,30 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+  mysql:
+    image: mysql:8.4
+    profiles:
+      - mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ashare_ledger}
+      MYSQL_USER: ${MYSQL_USER:-ashare}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ashare_dev_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ashare_root_password}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}" --silent
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
   frontend:
     build: ./frontend
     depends_on:
@@ -21,3 +56,6 @@ services:
         condition: service_healthy
     ports:
       - "8080:80"
+
+volumes:
+  mysql_data:
