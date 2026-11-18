@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
-- **Last Active**: 2026-11-17
+- **Total Sessions**: 12
+- **Last Active**: 2026-11-18
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~289 | Active |
+| `journal-1.md` | ~311 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-11-18 | 个股详情持仓汇总 | `4e9da9f` | `feat/trade-edit-refresh` |
 | 11 | 2026-11-17 | 完善持仓看板、批次明细与分级止盈 | `aa10418` | `master` |
 | 10 | 2026-11-17 | 卖出配对最近买入优先 | `cc568da` | `11-16-dashboard-realtime-pnl` |
 | 9 | 2026-11-16 | Dashboard-A股实时行情与浮盈 | `be58bf6` | `11-16-dashboard-realtime-pnl` |

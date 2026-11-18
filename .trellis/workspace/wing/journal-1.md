@@ -287,3 +287,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Next Steps
 
 - 尚未推送或部署。部署前核对目标数据库及Alembic基线，迁移应先于新版后端启动；不自动接管用户账本。
+
+
+## Session 12: 个股详情持仓汇总
+<!-- trellis-session: v=2 fp=942091ff00630d21 -->
+
+**Date**: 2026-11-18
+**Task**: 个股详情持仓汇总
+**Branch**: `feat/trade-edit-refresh`
+
+### Summary
+
+新增个股详情持仓汇总摘要，后端统一计算总持股数、持仓成本、已实现收益与总浮盈，并补充过期行情、空仓和范围切换的集成与 E2E 测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4e9da9f` | feat: 增加个股详情持仓汇总 |
+
+### Status
+
+[OK] **Completed**
