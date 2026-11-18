@@ -309,3 +309,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 配置 MySQL 后端支持
+<!-- trellis-session: v=2 fp=2b4bd7923c78cb1b -->
+
+**Date**: 2026-11-18
+**Task**: 配置 MySQL 后端支持
+**Branch**: `master`
+
+### Summary
+
+完成 .env 驱动的 MySQL 配置、PyMySQL 连接池、Compose profile、启动迁移和数据库规范；115 个后端测试通过，真实 MySQL 容器因镜像下载受阻未完成。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7d8a66d` | feat: 支持 MySQL 后端配置与启动迁移 |
+
+### Status
+
+[OK] **Completed**
