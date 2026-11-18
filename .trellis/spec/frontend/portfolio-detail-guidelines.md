@@ -7,7 +7,7 @@
 ## 2. 签名
 
 - `api.lookupSecurities`：外部候选可能没有本地 ID，选择时才创建本地证券。
-- `api.intraday`、`api.recalculate`、`api.profitSetting`、`api.saveProfitSetting`：以 src/api/client.ts 当前签名为准。
+- `api.intraday`、`api.lots`、`api.recalculate`、`api.profitSetting`、`api.saveProfitSetting`：以 src/api/client.ts 当前签名为准。
 - `IntradayChart.vue` 显示真实时序；`LotTable.vue` 发出列内设置事件。
 - `formatQuantity` 整数展示，`formatMoney(..., digits)` 支持股价三位；`percentInputToRate`/`rateToPercentInput` 精确转换字符串。
 - `utils/recalculate.ts` 的 `refreshPosition(scope, options)` 统一重算确认、防重、请求与失败分层；`isPositionRefreshing(scope)` 供两处入口绑定加载状态。
@@ -18,6 +18,8 @@
 - 止盈输入10%提交 `targetReturnPct:'0.1'`；后端浮盈返回10时直接显示10%。禁止将两种单位共用格式器。
 - 首次加载和每3秒轮询串行读取 intraday，再读同价 lots。页面隐藏/卸载清计时器，切证券/账户推进代次，旧响应不能更新当前页面。
 - 行情失败保留上一份真实参考并标记过期；批次浮盈只显示后端数值，已结清显示破折号；不能 Number 重算账务。
+- 个股详情使用 `LotsRead.summary` 展示总持股数、持仓成本、已实现收益和总浮盈；页面不自行相加、换算收益率或用格式化值回写。切换账户/证券或批次加载失败时清空汇总，异步响应继续按范围与代次校验。
+- 总浮盈为 null 时显示破折号：仍有剩余持仓时提示“暂无有效行情”，无剩余持仓时提示“暂无持仓”；有参考值但行情过期时保留数值并提示“参考浮盈 · 行情已过期”。`includeClosed` 只控制批次和结清明细，不改变汇总。
 - 个股按市场和代码同时识别，匹配币种账户；重算确认绑定发起时的个股和账户，确认后状态变化必须放弃旧操作。
 - 股数展示整数，不改变接口原始数量字符串；当前价3位，持仓总价值与 valuationStatus 一致，部分覆盖不可显示部分总值。
 - 批次按时间倒序，短 ID 悬浮全值；止盈来源/价格与“设置”按钮都在目标列，清空显式目标恢复继承，不保存投影副本。
@@ -38,6 +40,11 @@
 | lookup 外部失败 | 显示失败信息，仍可选择本地候选 |
 | 日内 points 为空 | 空态，禁止伪造折线 |
 | 请求期间切股/账户/离页 | 旧代次响应丢弃，不重新安排轮询 |
+| 个股汇总请求失败或切换范围 | 立即清空旧汇总，迟到响应不能写入 |
+| `summary.unrealizedPnl=null` 且仍有持仓 | 总浮盈显示破折号并提示暂无有效行情 |
+| `summary.unrealizedPnl=null` 且无剩余持仓 | 总浮盈显示破折号并提示暂无持仓 |
+| 汇总有值但行情过期 | 保留服务端参考值并显示过期说明 |
+| 切换显示已结清 | 四项汇总值不变，只切换批次和明细 |
 | 继承目标没有批次记录 | 显示来源和估计价，不发 createTarget |
 | 止盈输入无效 | 显示错误，不提交浮点或NaN |
 | 重算确认框期间换证券 | 不发送旧确认到新证券 |
@@ -54,6 +61,7 @@
 ## 5. 正常、边界与错误示例
 
 - 正常：全局10%，某股20%，批次无覆盖，列表显示“继承个股20%”；清空个股后显示全局10%。
+- 汇总：部分卖出后只显示剩余数量/成本与全部有效卖出收益，总浮盈直接显示后端值；开关结清前后四项一致。
 - 边界：零浮盈显示0.00及0.00%，缺失显示破折号，两者不同。
 - 错误：setInterval 叠加3秒请求；表单预填继承值并将其直接保存为覆盖。
 - 编辑：原价格 `10.123456`、原数量 `1.2345` 保持原始精度；只改备注不把时间截为分钟或把费用清零。
@@ -62,6 +70,8 @@
 ## 6. 必须测试
 
 mocked Playwright 覆盖外部查名和失败、本地 ID创建、市值/三位股价/整数数量、倒序/短 ID/浮盈、三级止盈精确率与清空、3秒刷新/隐藏/离页/切路由、重算确认和代码名称。保留旧预览过期回归。运行 type-check、build、E2E；截图仅用mock数据，不向真实账本插入测试交易。
+
+持仓汇总还须覆盖四项标签和值、结清开关前后数值不变、服务端过期行情参考值、缺行情破折号、无剩余持仓破折号与提示区分、涨跌色；切换账户/证券的迟到响应不得留下旧汇总。
 
 结清明细覆盖开关默认全部可见/关闭隐藏、多次部分卖出最终结清、多个闭仓批次、跨批本批配对量与分摊金额、原始整笔量辅助显示、时间倒序及切股/账户后不残留旧记录。
 
@@ -86,4 +96,12 @@ const targetReturnPct = percentInputToRate(form.targetReturnPct)
 // if (form.price !== trade.price) patch.price = form.price
 // invalidateDashboard()
 // await reload()
+```
+
+```ts
+// 错误：前端把批次数量/金额相加，并把缺失行情兜底为0。
+// const totalPnl = lots.reduce((sum, lot) => sum + Number(lot.unrealizedPnl ?? 0), 0)
+
+// 正确：原子保存服务端汇总，只负责格式化与空值/过期状态展示。
+holdingSummary.value = result.summary
 ```

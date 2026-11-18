@@ -102,10 +102,18 @@ export interface Lot {
   effectiveTarget?: EffectiveTarget | null
 }
 
+export interface LotsSummary {
+  remainingQty: string
+  remainingCost: string
+  realizedPnl: string
+  unrealizedPnl: string | null
+}
+
 export interface LotsRead {
   lots: Lot[]
   closedLotCount: number
   realizedPnl: string
+  summary: LotsSummary
   quote?: Quote | null
   currency?: Currency
   closedTradeDetails?: SettledTradeDetail[]

@@ -1,8 +1,11 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
-import type { DashboardRead, IntradayRead, Lot, ProfitSetting, ProfitTarget } from '../src/api/types'
+import type { DashboardRead, IntradayRead, Lot, LotsSummary, ProfitSetting, ProfitTarget } from '../src/api/types'
 
 const security = { id: 'security-1', market: 'SH', symbol: '600519', name: '贵州茅台', currency: 'CNY' as const }
 const quote = { symbol: 'SH:600519', securityId: security.id, currency: 'CNY' as const, lastPrice: '10.123000', changePct: '0', sourceTime: '2026-11-17T02:00:00Z', fetchedAt: '2026-11-17T02:00:00Z', provider: 'fixture', isStale: false }
+const detailSummary: LotsSummary = { remainingQty: '100.0000', remainingCost: '1000.0000', realizedPnl: '52.0000', unrealizedPnl: '12.3000' }
+const emptySummary: LotsSummary = { remainingQty: '0.0000', remainingCost: '0.0000', realizedPnl: '0.0000', unrealizedPnl: null }
+const noOpenSummary: LotsSummary = { remainingQty: '0.0000', remainingCost: '0.0000', realizedPnl: '52.0000', unrealizedPnl: null }
 
 /** 用固定响应模拟 API，测试不依赖真实行情网络。 */
 async function respond(route: Route, body: unknown, status = 200) {
@@ -25,7 +28,7 @@ function makeLot(overrides: Partial<Lot> = {}): Lot {
 
 /** 模拟分级止盈和详情刷新，保存写请求以验证继承读取零写入。 */
 async function mockDetail(page: Page) {
-  const state = { intradayRequests: 0, intradayError: false, activeIntraday: 0, maxIntraday: 0, lotRequests: 0, recalculateRequests: 0, targetPosts: [] as Array<Record<string, string>>, settingsWrites: [] as Array<{ scope: string; payload: Record<string, unknown> }>, targets: [] as ProfitTarget[], global: { targetReturnPct: '0.1', calculationBasis: 'NET', alertEnabled: true } as ProfitSetting | null, specific: null as ProfitSetting | null }
+  const state = { intradayRequests: 0, intradayError: false, lotsError: false, lotsQuoteMissing: false, lotsQuoteStale: false, noOpenLots: false, activeIntraday: 0, maxIntraday: 0, lotRequests: 0, recalculateRequests: 0, targetPosts: [] as Array<Record<string, string>>, settingsWrites: [] as Array<{ scope: string; payload: Record<string, unknown> }>, targets: [] as ProfitTarget[], global: { targetReturnPct: '0.1', calculationBasis: 'NET', alertEnabled: true } as ProfitSetting | null, specific: null as ProfitSetting | null }
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace('/api/v1', '')
@@ -45,13 +48,17 @@ async function mockDetail(page: Page) {
     }
     if (path.endsWith('/lots')) {
       state.lotRequests += 1
+      if (state.lotsError) return respond(route, { error: { message: '批次读取失败' } }, 503)
       expect(url.searchParams.get('accountId')).toBe('account-cny')
       const setting = state.specific ?? state.global
       const explicit = state.targets.find((target) => target.status === 'ACTIVE' || target.status === 'TRIGGERED')
       const effective = explicit ? { ...explicit, source: 'LOT' } : setting ? { ...setting, source: state.specific ? 'SECURITY' : 'GLOBAL', targetPriceEstimate: '11.000000' } : null
       const open = makeLot({ targets: state.targets, effectiveTarget: effective as Lot['effectiveTarget'] })
       const closed = makeLot({ id: 'aaaaaaaa-older-lot-full', status: 'CLOSED', executedAt: '2026-11-16T01:30:00Z', remainingQty: '0.0000', unrealizedPnl: '999', unrealizedReturnPct: '99', effectiveTarget: null })
-      return respond(route, { lots: url.searchParams.get('includeClosed') === 'true' ? [closed, open] : [open], closedLotCount: 1, realizedPnl: '52.0000', quote, currency: 'CNY' })
+      const lotsQuote = state.lotsQuoteMissing ? null : state.lotsQuoteStale ? { ...quote, isStale: true } : quote
+      const summary = state.noOpenLots ? noOpenSummary : state.lotsQuoteMissing ? { ...detailSummary, unrealizedPnl: null } : detailSummary
+      const returnedLots = state.noOpenLots ? (url.searchParams.get('includeClosed') === 'true' ? [closed] : []) : (url.searchParams.get('includeClosed') === 'true' ? [closed, open] : [open])
+      return respond(route, { lots: returnedLots, closedLotCount: 1, realizedPnl: '52.0000', summary, quote: lotsQuote, currency: 'CNY' })
     }
     if (path.endsWith('/recalculate')) { state.recalculateRequests += 1; return respond(route, { rebuiltLots: 2, rebuiltMatches: 1 }) }
     if (path.endsWith('/profit-settings')) {
@@ -86,7 +93,7 @@ test('看板展示完整市值并通过外部查询取得证券名称', async ({
     if (path === '/securities/lookup') { lookupCalls += 1; return respond(route, { securities: [{ market: 'SH', symbol: '600519', name: '外部名称贵州茅台', currency: 'CNY' }], error: null }) }
     if (path === '/securities' && route.request().method() === 'POST') { createdName = route.request().postDataJSON().name; return respond(route, { ...security, name: createdName }, 201) }
     if (path === '/securities') return respond(route, [])
-    if (path.endsWith('/lots')) return respond(route, { lots: [], closedLotCount: 0, realizedPnl: '0' })
+    if (path.endsWith('/lots')) return respond(route, { lots: [], closedLotCount: 0, realizedPnl: '0', summary: emptySummary })
     return respond(route, null)
   })
   await page.goto('/dashboard')
@@ -107,9 +114,22 @@ test('详情批次倒序、短编号、浮盈和只读继承正确展示', async
   const state = await mockDetail(page)
   await page.goto('/security/SH/600519')
   await expect(page.getByRole('img', { name: '当前交易日股价走势图' })).toBeVisible()
+  const holdingSummary = page.locator('.holding-summary')
+  await expect(holdingSummary).toContainText('总持股数')
+  await expect(holdingSummary).toContainText('持仓成本')
+  await expect(holdingSummary).toContainText('已实现收益')
+  await expect(holdingSummary).toContainText('总浮盈')
+  await expect(holdingSummary.locator('.summary-value').nth(0)).toHaveText('100')
+  await expect(holdingSummary.locator('.summary-value').nth(1)).toHaveText('¥ 1,000.00')
+  await expect(holdingSummary.locator('.summary-value').nth(2)).toHaveText('¥ 52.00')
+  await expect(holdingSummary.locator('.summary-value').nth(3)).toHaveText('¥ 12.30')
+  await expect(holdingSummary.locator('.summary-value').nth(2)).toHaveClass(/up/)
+  await expect(holdingSummary.locator('.summary-value').nth(3)).toHaveClass(/up/)
+  const summaryBeforeToggle = await holdingSummary.locator('.summary-value').allTextContents()
   await page.getByText('显示已结清').click()
   const rows = page.locator('.lot-table .el-table__row')
   await expect(rows).toHaveCount(2)
+  await expect.poll(() => holdingSummary.locator('.summary-value').allTextContents()).toEqual(summaryBeforeToggle)
   await expect(rows.first().locator('.lot-code')).toHaveText('bbbbbbbb')
   await expect(rows.first().locator('.lot-code')).toHaveAttribute('title', 'bbbbbbbb-newer-lot-full')
   await expect(rows.first().locator('td').nth(2)).toHaveText('100')
@@ -222,7 +242,50 @@ test('日内行情失败保留真实曲线并明确过期，交易入口仍可�
   await expect(page.getByText(/行情刷新失败：行情源超时/)).toBeVisible()
   await expect(chart).toBeVisible()
   await expect(page.locator('.quote-value-row')).toContainText('已过期')
+  await expect(page.locator('.summary-item').filter({ hasText: '总浮盈' })).toContainText('参考浮盈 · 行情已过期')
   await expect(page.getByRole('button', { name: '录入买入', exact: true })).toBeEnabled()
+})
+
+test('详情汇总无有效行情时保留空值并明确提示', async ({ page }) => {
+  const state = await mockDetail(page)
+  state.lotsQuoteMissing = true
+  await page.goto('/security/SH/600519')
+  const totalProfit = page.locator('.summary-item').filter({ hasText: '总浮盈' })
+  await expect(totalProfit.locator('.summary-value')).toHaveText('—')
+  await expect(totalProfit.locator('.summary-value')).toHaveClass(/neutral/)
+  await expect(totalProfit).toContainText('暂无有效行情')
+})
+
+test('详情批次读取失败时清空旧汇总', async ({ page }) => {
+  await page.clock.install()
+  const state = await mockDetail(page)
+  await page.goto('/security/SH/600519')
+  const totalProfit = page.locator('.summary-item').filter({ hasText: '总浮盈' }).locator('.summary-value')
+  await expect(totalProfit).toHaveText('¥ 12.30')
+  state.lotsError = true
+  await page.clock.runFor(3100)
+  await expect(totalProfit).toHaveText('—')
+  await expect(totalProfit).toHaveClass(/neutral/)
+})
+
+test('详情汇总保留服务端过期行情参考值并明确提示', async ({ page }) => {
+  const state = await mockDetail(page)
+  state.lotsQuoteStale = true
+  await page.goto('/security/SH/600519')
+  const totalProfit = page.locator('.summary-item').filter({ hasText: '总浮盈' })
+  await expect(totalProfit.locator('.summary-value')).toHaveText('¥ 12.30')
+  await expect(totalProfit).toContainText('参考浮盈 · 行情已过期')
+})
+
+test('详情无剩余持仓时总浮盈为空并区分空仓提示', async ({ page }) => {
+  const state = await mockDetail(page)
+  state.noOpenLots = true
+  await page.goto('/security/SH/600519')
+  const totalProfit = page.locator('.summary-item').filter({ hasText: '总浮盈' })
+  await expect(totalProfit.locator('.summary-value')).toHaveText('—')
+  await expect(totalProfit.locator('.summary-value')).toHaveClass(/neutral/)
+  await expect(totalProfit).toContainText('暂无持仓')
+  await expect(totalProfit).not.toContainText('暂无有效行情')
 })
 
 test('外部查名失败保留本地证券结果并明确提示', async ({ page }) => {
@@ -233,7 +296,7 @@ test('外部查名失败保留本地证券结果并明确提示', async ({ page 
     if (path === '/dashboard') return respond(route, dashboard())
     if (path === '/securities/lookup') { lookups += 1; return respond(route, { securities: [], error: '外部接口暂不可用，本地结果可继续使用' }) }
     if (path === '/securities') return respond(route, [security])
-    if (path.endsWith('/lots')) return respond(route, { lots: [], closedLotCount: 0, realizedPnl: '0' })
+    if (path.endsWith('/lots')) return respond(route, { lots: [], closedLotCount: 0, realizedPnl: '0', summary: emptySummary })
     return respond(route, null)
   })
   await page.goto('/dashboard')

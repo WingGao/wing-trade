@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
-import type { Account, Currency, IntradayRead, Lot, LotsRead, PositionRefreshScope, Quote, Security, SettledTradeDetail } from '../api/types'
+import type { Account, Currency, IntradayRead, Lot, LotsRead, LotsSummary, PositionRefreshScope, Quote, Security, SettledTradeDetail } from '../api/types'
 import LotTable from '../components/LotTable.vue'
 import SettledTradeTable from '../components/SettledTradeTable.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
@@ -14,7 +14,7 @@ import IntradayChart from '../components/IntradayChart.vue'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLedgerStore } from '../stores/ledger'
-import { formatDateTime, formatMoney } from '../utils/format'
+import { formatDateTime, formatMoney, formatQuantity, trendClass } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
 
 const route = useRoute()
@@ -24,9 +24,9 @@ const security = ref<Security | null>(null)
 const accounts = ref<Account[]>([])
 const accountId = ref('')
 const lots = ref<Lot[]>([])
+const holdingSummary = ref<LotsSummary | null>(null)
 const closedTradeDetails = ref<SettledTradeDetail[]>([])
 const closedLotCount = ref(0)
-const realizedPnl = ref('0')
 const lotQuote = ref<Quote | null>(null)
 const intraday = ref<IntradayRead | null>(null)
 const loading = ref(false)
@@ -52,7 +52,11 @@ const currentQuote = computed(() => {
   const quote = lotQuote.value ?? intraday.value?.quote
   return quote && (marketError.value || intraday.value?.isStale) ? { ...quote, isStale: true } : quote
 })
+/** 判断有价汇总是否只能作为过期参考展示。 */
+const holdingSummaryStale = computed(() => holdingSummary.value?.unrealizedPnl !== null && holdingSummary.value?.unrealizedPnl !== undefined && Boolean(currentQuote.value?.isStale))
 const hasOpenLots = computed(() => lots.value.some((lot) => lot.status === 'OPEN'))
+/** 判断服务端汇总是否包含仍有剩余数量的未结清批次。 */
+const hasRemainingHolding = computed(() => Boolean(holdingSummary.value && /[1-9]/.test(holdingSummary.value.remainingQty)))
 let alive = false
 let generation = 0
 let lotGeneration = 0
@@ -69,9 +73,9 @@ function clearTimer() {
 /** 统一替换后端返回的批次估值，不在浏览器重算账务。 */
 function applyLots(result: LotsRead) {
   lots.value = result.lots
+  holdingSummary.value = result.summary
   closedTradeDetails.value = preferences.includeClosed ? result.closedTradeDetails ?? [] : []
   closedLotCount.value = result.closedLotCount
-  realizedPnl.value = result.realizedPnl
   lotQuote.value = result.quote ?? null
   needsRefresh.value = result.needsRefresh ?? false
   resolvedStrategyId.value = result.strategyId ?? requestedStrategyId.value ?? result.lots[0]?.strategyId
@@ -87,10 +91,19 @@ async function loadLots(afterWrite = false): Promise<boolean> {
   const currentGeneration = generation
   const currentDataGeneration = dataGeneration
   const includeClosed = preferences.includeClosed
-  if (!currentSecurity || !account) { lots.value = []; closedTradeDetails.value = []; needsRefresh.value = false; return false }
-  const result = await api.lots(currentSecurity.id, includeClosed, account, strategy)
+  if (!currentSecurity || !account) { lots.value = []; holdingSummary.value = null; closedTradeDetails.value = []; needsRefresh.value = false; return false }
+  let result: LotsRead
+  try {
+    result = await api.lots(currentSecurity.id, includeClosed, account, strategy)
+  } catch (cause) {
+    if (alive && currentGeneration === generation && currentDataGeneration === dataGeneration && request === lotGeneration && account === accountId.value && strategy === requestedStrategyId.value && includeClosed === preferences.includeClosed) holdingSummary.value = null
+    throw cause
+  }
   if (!alive || currentGeneration !== generation || currentDataGeneration !== dataGeneration || request !== lotGeneration || account !== accountId.value || strategy !== requestedStrategyId.value || includeClosed !== preferences.includeClosed) return false
-  if ((result.accountId && result.accountId !== account) || (result.strategyId && strategy && result.strategyId !== strategy)) throw new Error('返回的持仓范围与当前账户、策略不一致')
+  if ((result.accountId && result.accountId !== account) || (result.strategyId && strategy && result.strategyId !== strategy)) {
+    holdingSummary.value = null
+    throw new Error('返回的持仓范围与当前账户、策略不一致')
+  }
   applyLots(result)
   return true
 }
@@ -142,6 +155,7 @@ async function loadPage() {
   marketError.value = ''
   security.value = null
   lots.value = []
+  holdingSummary.value = null
   closedTradeDetails.value = []
   lotQuote.value = null
   intraday.value = null
@@ -220,6 +234,7 @@ watch(() => [accountId.value, preferences.includeClosed] as const, ([account], p
       generation += 1
       resolvedStrategyId.value = undefined
       lots.value = []
+      holdingSummary.value = null
       needsRefresh.value = false
     }
     if (!mutationActive.value) void reloadLots()
@@ -243,11 +258,32 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
     <IntradayChart :data="intraday" />
   </el-card>
   <el-card class="panel">
-    <template #header><div class="panel-title lot-heading"><span>持仓批次 <span class="muted">已结清 {{ closedLotCount }} 批 · 累计已实现收益 {{ formatMoney(realizedPnl, currency) }}</span></span><div class="toolbar"><el-switch v-model="preferences.includeClosed" active-text="显示已结清" /><el-button :disabled="!security || !accountId" :loading="rebuilding" @click="recalculate">重新计算</el-button></div></div></template>
+    <template #header><div class="panel-title lot-heading"><span>持仓批次 <span class="muted">已结清 {{ closedLotCount }} 批</span></span><div class="toolbar"><el-switch v-model="preferences.includeClosed" active-text="显示已结清" /><el-button :disabled="!security || !accountId" :loading="rebuilding" @click="recalculate">重新计算</el-button></div></div></template>
     <el-alert v-if="needsRefresh" type="warning" :closable="false" show-icon class="status-alert" title="需要刷新：交易流水已更正，当前持仓与收益尚未重新核算。">
       <p>刷新仅重新计算当前账户、个股与策略；已有显式止盈目标请在重算后核对。</p>
       <el-button type="warning" :loading="rebuilding" @click="recalculate">刷新持仓</el-button>
     </el-alert>
+    <dl class="holding-summary" aria-label="持仓汇总">
+      <div class="summary-item">
+        <dt>总持股数</dt>
+        <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty) }}</dd>
+      </div>
+      <div class="summary-item">
+        <dt>持仓成本</dt>
+        <dd class="summary-value">{{ formatMoney(holdingSummary?.remainingCost, currency) }}</dd>
+      </div>
+      <div class="summary-item">
+        <dt>已实现收益</dt>
+        <dd class="summary-value" :class="trendClass(holdingSummary?.realizedPnl)">{{ formatMoney(holdingSummary?.realizedPnl, currency) }}</dd>
+      </div>
+      <div class="summary-item">
+        <dt>总浮盈</dt>
+        <dd class="summary-value" :class="trendClass(holdingSummary?.unrealizedPnl)">{{ formatMoney(holdingSummary?.unrealizedPnl, currency) }}</dd>
+        <p v-if="holdingSummary && !hasRemainingHolding" class="summary-note">暂无持仓</p>
+        <p v-else-if="holdingSummary?.unrealizedPnl === null" class="summary-note">暂无有效行情</p>
+        <p v-else-if="holdingSummaryStale" class="summary-note">参考浮盈 · 行情已过期</p>
+      </div>
+    </dl>
     <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" @set-target="addTarget" /></div>
     <section v-if="preferences.includeClosed" class="settled-trade-section">
       <h3 class="panel-title">已结清买卖明细</h3>
@@ -266,6 +302,18 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
 .detail-head { gap: 16px; flex-wrap: wrap; }
 .detail-head .toolbar { flex-wrap: wrap; }
 .chart-heading, .lot-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.holding-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 18px; border-top: 1px solid var(--el-border-color-lighter); border-bottom: 1px solid var(--el-border-color-lighter); }
+.summary-item { min-width: 0; padding: 12px 16px; border-left: 1px solid var(--el-border-color-lighter); }
+.summary-item:first-child { border-left: 0; padding-left: 0; }
+.summary-item dt { margin-bottom: 5px; color: var(--el-text-color-secondary); font-size: 12px; }
+.summary-value { margin: 0; overflow-wrap: anywhere; font-size: 17px; font-weight: 600; }
+.summary-note { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.4; }
 .settled-trade-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--el-border-color-lighter); }
 .settled-trade-section h3 { margin: 0 0 8px; font-size: 16px; }
+@media (max-width: 720px) {
+  .holding-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-item { padding: 12px; }
+  .summary-item:nth-child(odd) { border-left: 0; padding-left: 0; }
+  .summary-item:nth-child(n + 3) { border-top: 1px solid var(--el-border-color-lighter); }
+}
 </style>

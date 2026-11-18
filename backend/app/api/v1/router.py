@@ -660,6 +660,20 @@ def list_lots(
     realized = round_amount(sum((match.realized_pnl for match in active_matches), Decimal("0")))
     snapshots = quote_collector.service.read_cached(session, [security])
     snapshot = snapshots[0] if snapshots else None
+    open_lots = [
+        lot for lot in lots if lot.status == "OPEN" and lot.remaining_qty > 0
+    ]
+    summary_metrics = AccountingService.position_metrics(
+        open_lots,
+        latest_price=snapshot.last_price if snapshot is not None and open_lots else None,
+        realized_pnl=realized,
+    )
+    summary = {
+        "remainingQty": _fmt(summary_metrics.remaining_qty),
+        "remainingCost": _fmt(summary_metrics.remaining_cost),
+        "realizedPnl": _fmt(summary_metrics.realized_pnl),
+        "unrealizedPnl": _fmt(summary_metrics.unrealized_pnl),
+    }
     quote = (
         None
         if snapshot is None
@@ -701,6 +715,7 @@ def list_lots(
         ),
         "closedLotCount": len(closed),
         "realizedPnl": _fmt(realized),
+        "summary": summary,
         "quote": quote,
         "currency": currency_for_market(security.market),
         "closedTradeDetails": _closed_trade_details(closed) if include_closed else [],

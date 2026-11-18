@@ -172,13 +172,87 @@ def test_lots_include_partial_sale_pnl_quote_and_descending_order(ledger_context
         body = result.json()
         assert [lot["buyTradeId"] for lot in body["lots"]] == [second.id, first.id]
         assert Decimal(body["realizedPnl"]) == Decimal("9")
+        assert body["summary"] == {
+            "remainingQty": "8.0000",
+            "remainingCost": "81.0000",
+            "realizedPnl": "9.0000",
+            "unrealizedPnl": "15.0000",
+        }
         assert body["quote"]["provider"] == "test"
         assert Decimal(body["lots"][0]["unrealizedPnl"]) == Decimal("1")
         assert Decimal(body["lots"][1]["unrealizedPnl"]) == Decimal("14")
+        with_closed = client.get(
+            f"/api/v1/securities/{security.id}/lots?accountId={account.id}&includeClosed=true"
+        )
+        assert with_closed.status_code == 200
+        assert with_closed.json()["summary"] == body["summary"]
         trades = client.get("/api/v1/trades").json()
         assert trades[0]["side"] == "SELL"
         assert trades[0]["symbol"] == "600519"
         assert trades[0]["name"] == "贵州茅台"
+
+
+def test_lots_summary_ignores_closed_lots_and_preserves_null_quote(ledger_context) -> None:
+    """汇总只统计剩余批次，结清开关不改变口径，缺价与空仓的总浮盈均为空。"""
+    session, account, security, _ = ledger_context
+    _buy(ledger_context, day=1, qty="10")
+    _sell(ledger_context, day=2, qty="10")
+    _buy(ledger_context, day=3, qty="4", price="11")
+    _sell(ledger_context, day=4, qty="2")
+    session.add(
+        QuoteCache(
+            security_id=security.id,
+            last_price=Decimal("12"),
+            provider="test",
+            fetched_at=datetime.now(UTC),
+            is_stale=False,
+        )
+    )
+    session.commit()
+    url = f"/api/v1/securities/{security.id}/lots?accountId={account.id}"
+    with _api(session) as client:
+        active_only = client.get(url)
+        assert active_only.status_code == 200
+        summary = active_only.json()["summary"]
+        assert summary == {
+            "remainingQty": "2.0000",
+            "remainingCost": "22.0000",
+            "realizedPnl": "22.0000",
+            "unrealizedPnl": "2.0000",
+        }
+        assert active_only.json()["realizedPnl"] == summary["realizedPnl"]
+
+        with_closed = client.get(f"{url}&includeClosed=true")
+        assert with_closed.status_code == 200
+        assert len(with_closed.json()["lots"]) == 2
+        assert with_closed.json()["summary"] == summary
+
+        quote_row = session.get(QuoteCache, security.id)
+        assert quote_row is not None
+        session.delete(quote_row)
+        session.commit()
+        without_quote = client.get(url).json()["summary"]
+        assert without_quote == {**summary, "unrealizedPnl": None}
+
+        session.add(
+            QuoteCache(
+                security_id=security.id,
+                last_price=Decimal("12"),
+                provider="test",
+                fetched_at=datetime.now(UTC),
+                is_stale=False,
+            )
+        )
+        session.commit()
+        _sell(ledger_context, day=5, qty="2")
+        no_open_lots = client.get(f"{url}&includeClosed=true")
+        assert no_open_lots.status_code == 200
+        assert no_open_lots.json()["summary"] == {
+            "remainingQty": "0.0000",
+            "remainingCost": "0.0000",
+            "realizedPnl": "24.0000",
+            "unrealizedPnl": None,
+        }
 
 
 def _snapshot(session: Session) -> tuple[list, list, list]:
