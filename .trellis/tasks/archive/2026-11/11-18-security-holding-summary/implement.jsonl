@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "约束个股详情页批次、行情估值和账务刷新交互"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "约束前端不得计算账务收益及必须执行类型、构建和 E2E 验证"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "约束 Lots 响应十进制字符串 DTO 和 TypeScript 类型边界"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "约束 lots 响应、有效卖出收益和行情估值契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "约束后端 Decimal 计算、精度与集成测试要求"}

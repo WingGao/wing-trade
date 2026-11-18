@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "检查汇总口径、行情过期状态、范围切换和批次表兼容性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查前端未重算账务且类型检查、构建、E2E 覆盖完整"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "检查 DTO、空值与十进制字符串类型处理"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "检查 lots 附加 summary 契约、includeClosed 口径和兼容字段"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查 Decimal 精度、无行情空值和集成测试覆盖"}
