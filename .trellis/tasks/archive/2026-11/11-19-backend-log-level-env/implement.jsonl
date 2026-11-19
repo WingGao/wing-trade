@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "实现日志等级配置和 Uvicorn 日志控制时必须遵循项目日志等级用途与脱敏规范。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "实现需要补充配置与日志行为测试，并遵循后端测试和静态检查要求。"}

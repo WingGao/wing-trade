@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检查日志等级是否按规范过滤应用与 Uvicorn 日志，并确认未引入敏感信息输出。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查测试覆盖正常值、默认值、非法值及日志过滤行为，并执行可用质量命令。"}
