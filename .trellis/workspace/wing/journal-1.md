@@ -353,3 +353,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 用户体系、邮箱验证码登录与管理员邀请机制
+<!-- trellis-session: v=2 fp=055c3332a303fc13 -->
+
+**Date**: 2026-11-20
+**Task**: 用户体系、邮箱验证码登录与管理员邀请机制
+**Branch**: `master`
+
+### Summary
+
+实现无密码邮箱验证码登录、30天服务端HttpOnly会话、管理员定向邀请与用户管理、全链路多用户数据隔离（含ProfitSetting）、SQLite/MySQL存量数据无损归属默认管理员、SMTP 465自动SSL推断及前端登录/用户管理界面
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `544a088` | feat: 新增用户体系、邮箱验证码登录与管理员邀请机制 |
+
+### Status
+
+[OK] **Completed**
