@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_current_user, get_db
 from app.domain.exceptions import EntityNotFoundError
 from app.domain.markets import currency_for_market
 from app.market_data.security_info import IntradayService, SecurityInfoProvider
 from app.market_data.service import QuoteService
+from app.models.auth import User
 from app.models.ledger import Security
 
 router = APIRouter()
@@ -22,6 +23,7 @@ intraday_service = IntradayService(security_info_provider)
 @router.get("/securities/lookup")
 async def lookup_securities(
     query: str = Query(min_length=1, max_length=80),
+    _current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """每次显式查找均访问外部接口，失败时保留本地候选和错误说明。"""
@@ -58,6 +60,7 @@ async def lookup_securities(
 @router.get("/securities/{security_id}/intraday")
 async def read_intraday(
     security_id: str,
+    _current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """返回真实日内曲线，并将同次行情写入共享估值缓存供批次读取。"""

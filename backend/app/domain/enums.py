@@ -52,3 +52,19 @@ class MatchingMethod(_ValueEnum):
     EQUAL = "EQUAL"
     MANUAL = "MANUAL"
 
+
+class UserRole(_ValueEnum):
+    """用户角色：管理员或普通用户。"""
+
+    ADMIN = "ADMIN"
+    USER = "USER"
+
+
+class UserStatus(_ValueEnum):
+    """用户生命周期状态：待激活、正常或已禁用。"""
+
+    INVITED = "INVITED"
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+
+

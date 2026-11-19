@@ -1,14 +1,25 @@
-import type { Account, AnalyticsSummary, ApiError, DashboardMode, DashboardRead, IntradayRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead } from './types'
+import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
-/** 统一发送 API 请求并将领域错误转换为界面可读错误。 */
+let unauthorizedHandler: (() => void) | null = null
+
+/** 注册全局 401 未登录回调，用于清理前端登录态并跳转登录页。 */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler
+}
+
+/** 统一发送 API 请求（默认携带同源 HttpOnly Cookie）并将领域错误转换为界面可读错误。 */
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${base}${path}`, {
     ...init,
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
   })
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/')) {
+      unauthorizedHandler?.()
+    }
     const payload = (await response.json().catch(() => ({}))) as ApiError
     throw new Error(payload.error?.message ?? `请求失败（${response.status}）`)
   }
@@ -24,6 +35,22 @@ const query = (params: Record<string, string | number | boolean | undefined>) =>
 }
 
 export const api = {
+  /** 向受邀或已激活邮箱请求 6 位登录验证码。 */
+  requestLoginCode: (email: string) => request<RequestCodeRead>('/auth/request-code', { method: 'POST', body: JSON.stringify({ email }) }),
+  /** 提交邮箱与验证码完成登录并写入服务端会话 Cookie。 */
+  verifyLoginCode: (email: string, code: string) => request<AuthMeRead>('/auth/verify-code', { method: 'POST', body: JSON.stringify({ email, code }) }),
+  /** 读取当前已登录用户资料。 */
+  me: () => request<AuthMeRead>('/auth/me'),
+  /** 退出登录并吊销服务端会话。 */
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+  /** 管理员查询系统内全部用户与待激活邀请。 */
+  adminUsers: () => request<AuthUser[]>('/admin/users'),
+  /** 管理员按邮箱定向邀请普通用户。 */
+  adminInviteUser: (payload: { email: string; displayName?: string | null }) => request<InviteUserRead>('/admin/users/invite', { method: 'POST', body: JSON.stringify(payload) }),
+  /** 管理员撤销尚未首登激活的邀请记录。 */
+  adminRevokeInvite: (userId: string) => request<void>(`/admin/users/${userId}/invite`, { method: 'DELETE' }),
+  /** 管理员切换普通用户启用或禁用状态。 */
+  adminUpdateUserStatus: (userId: string, status: 'ACTIVE' | 'DISABLED') => request<AuthMeRead>(`/admin/users/${userId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   accounts: () => request<Account[]>('/accounts'),
   createAccount: (payload: Record<string, unknown>) => request<Account>('/accounts', { method: 'POST', body: JSON.stringify(payload) }),
   positions: (includeClosed = false) => request<Position[]>(`/positions?${query({ includeClosed })}`),

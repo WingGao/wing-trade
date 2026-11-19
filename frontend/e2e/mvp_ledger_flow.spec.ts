@@ -140,6 +140,11 @@ function makeSellPreview(qty: string): SellPreview {
 
 /** 模拟账户列表，使快速记账账户选择不会访问真实后端。 */
 async function mockAccounts(page: Page) {
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } }),
+  }))
   await page.route('**/api/v1/securities/lookup**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ securities: [{ id: 'security-1', market: 'SH', symbol: '600519', name: '贵州茅台', currency: 'CNY' }], error: null }) }))
   await page.route('**/api/v1/securities?query=', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }))
   await page.route('**/api/v1/accounts', (route) => route.fulfill({

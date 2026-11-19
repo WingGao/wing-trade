@@ -1,5 +1,35 @@
 export type Currency = 'CNY' | 'USD'
 
+export type UserRole = 'ADMIN' | 'USER'
+
+export type UserStatus = 'INVITED' | 'ACTIVE' | 'DISABLED'
+
+export interface AuthUser {
+  id: string
+  email: string
+  displayName?: string | null
+  role: UserRole
+  status: UserStatus
+  isDefaultAdmin: boolean
+  lastLoginAt?: string | null
+  createdAt: string
+}
+
+export interface RequestCodeRead {
+  sent: boolean
+  expiresInSeconds: number
+  cooldownSeconds: number
+}
+
+export interface AuthMeRead {
+  user: AuthUser
+}
+
+export interface InviteUserRead {
+  user: AuthUser
+  inviteEmailSent: boolean
+}
+
 export type MatchingMethod = 'FIFO' | 'LIFO' | 'EQUAL' | 'MANUAL'
 
 export type DashboardMode = 'cache' | 'auto' | 'manual'

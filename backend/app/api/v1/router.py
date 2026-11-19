@@ -11,10 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.api.deps import (
+    get_current_user,
     get_db,
     request_actor,
     resolve_account,
     resolve_strategy,
+    resolve_user_account_ids,
+    resolve_user_lot,
+    resolve_user_target,
+    resolve_user_trade,
     validate_account_security,
 )
 from app.api.schemas.account import AccountCreate
@@ -30,6 +35,8 @@ from app.api.schemas.trade import (
     VoidTradeRequest,
 )
 from app.api.utils import begin_write, fees_from, finish_write
+from app.api.v1.admin import router as admin_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.market import router as market_router
 from app.domain.enums import CalcBasis, MatchingMethod, TradeSide, TradeStatus
 from app.domain.exceptions import EntityNotFoundError, ValidationError
@@ -37,6 +44,7 @@ from app.domain.markets import currency_for_market
 from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_price, round_qty
 from app.market_data import QuoteCollector, create_quote_provider
+from app.models.auth import User
 from app.models.ledger import (
     Account,
     Cycle,
@@ -63,6 +71,8 @@ from app.services.target import TargetService
 quote_collector = QuoteCollector(create_quote_provider())
 
 router = APIRouter(prefix="/api/v1")
+router.include_router(auth_router)
+router.include_router(admin_router)
 router.include_router(market_router)
 
 
@@ -247,15 +257,34 @@ def _security_or_404(session: Session, security_id: str) -> Security:
 
 
 @router.get("/accounts")
-def list_accounts(session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    return [account_data(account) for account in session.scalars(select(Account).order_by(Account.created_at))]
+def list_accounts(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """返回当前登录用户的全部资金账户。"""
+    stmt = (
+        select(Account)
+        .where(Account.user_id == current_user.id)
+        .order_by(Account.created_at)
+    )
+    return [account_data(account) for account in session.scalars(stmt)]
 
 
 @router.post("/accounts", status_code=status.HTTP_201_CREATED)
-def create_account(payload: AccountCreate, session: Session = Depends(get_db)) -> dict[str, Any]:
+def create_account(
+    payload: AccountCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """为当前登录用户创建新资金账户并初始化默认策略。"""
     begin_write(session)
     try:
-        account = Account(name=payload.name, currency=payload.currency, broker=payload.broker)
+        account = Account(
+            user_id=current_user.id,
+            name=payload.name,
+            currency=payload.currency,
+            broker=payload.broker,
+        )
         session.add(account)
         session.flush()
         session.add(Strategy(account_id=account.id, name="DEFAULT"))
@@ -268,7 +297,12 @@ def create_account(payload: AccountCreate, session: Session = Depends(get_db)) -
 
 
 @router.get("/securities")
-def list_securities(query: str | None = Query(default=None), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def list_securities(
+    query: str | None = Query(default=None),
+    _current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """检索公共证券资料表。"""
     stmt = select(Security).order_by(Security.market, Security.symbol)
     if query:
         term = f"%{query}%"
@@ -280,7 +314,12 @@ def list_securities(query: str | None = Query(default=None), session: Session = 
 
 
 @router.post("/securities", status_code=status.HTTP_201_CREATED)
-def create_security(payload: SecurityCreate, session: Session = Depends(get_db)) -> dict[str, Any]:
+def create_security(
+    payload: SecurityCreate,
+    _current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """登记公共证券基础资料，已存在时直接返回原记录。"""
     begin_write(session)
     try:
         market = payload.market.upper()
@@ -303,17 +342,30 @@ def create_security(payload: SecurityCreate, session: Session = Depends(get_db))
 
 
 @router.get("/watchlist")
-def list_watchlist(account_id: str | None = Query(default=None, alias="accountId"), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    account_id = resolve_account(session, account_id)
+def list_watchlist(
+    account_id: str | None = Query(default=None, alias="accountId"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """返回当前用户指定账户的自选股列表。"""
+    account_id = resolve_account(session, account_id, user_id=current_user.id)
     rows = session.execute(select(WatchlistItem, Security).join(Security, Security.id == WatchlistItem.security_id).where(WatchlistItem.account_id == account_id).order_by(WatchlistItem.sort_order, WatchlistItem.created_at)).all()
     return [{"id": item.id, "accountId": item.account_id, "securityId": item.security_id, "sortOrder": item.sort_order, "security": security_data(security)} for item, security in rows]
 
 
 @router.post("/watchlist", status_code=status.HTTP_201_CREATED)
-def add_watchlist(payload: WatchlistItemCreate, account_id: str | None = Query(default=None, alias="accountId"), session: Session = Depends(get_db)) -> dict[str, Any]:
+def add_watchlist(
+    payload: WatchlistItemCreate,
+    account_id: str | None = Query(default=None, alias="accountId"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """将证券加入当前用户的自选列表。"""
     begin_write(session)
     try:
-        account = resolve_account(session, account_id or payload.account_id)
+        account = resolve_account(
+            session, account_id or payload.account_id, user_id=current_user.id
+        )
         security = _security_or_404(session, payload.security_id)
         item = session.scalar(select(WatchlistItem).where(WatchlistItem.account_id == account, WatchlistItem.security_id == security.id))
         if item is None:
@@ -328,10 +380,16 @@ def add_watchlist(payload: WatchlistItemCreate, account_id: str | None = Query(d
 
 
 @router.delete("/watchlist/{security_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_watchlist(security_id: str, account_id: str | None = Query(default=None, alias="accountId"), session: Session = Depends(get_db)) -> None:
+def remove_watchlist(
+    security_id: str,
+    account_id: str | None = Query(default=None, alias="accountId"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """从当前用户自选列表中移除指定证券。"""
     begin_write(session)
     try:
-        account = resolve_account(session, account_id)
+        account = resolve_account(session, account_id, user_id=current_user.id)
         item = session.scalar(select(WatchlistItem).where(WatchlistItem.account_id == account, WatchlistItem.security_id == security_id))
         if item is not None:
             session.delete(item)
@@ -341,8 +399,15 @@ def remove_watchlist(security_id: str, account_id: str | None = Query(default=No
         raise
 
 
-def _resolve_trade_scope(session: Session, account_id: str | None, strategy_id: str | None, security_id: str) -> tuple[str, str]:
-    account = resolve_account(session, account_id)
+def _resolve_trade_scope(
+    session: Session,
+    user_id: str,
+    account_id: str | None,
+    strategy_id: str | None,
+    security_id: str,
+) -> tuple[str, str]:
+    """解析并校验当前用户可用的交易账户、策略与证券币种匹配关系。"""
+    account = resolve_account(session, account_id, user_id=user_id)
     strategy = resolve_strategy(session, account, strategy_id)
     security = _security_or_404(session, security_id)
     validate_account_security(session, account, security.market)
@@ -354,14 +419,21 @@ def list_trades(
     account_id: str | None = Query(default=None, alias="accountId"),
     security_id: str | None = Query(default=None, alias="securityId"),
     include_voided: bool = Query(default=False, alias="includeVoided"),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """按成交时间倒序返回流水，证券名称与代码随交易一并返回。"""
+    """按成交时间倒序返回当前用户流水，证券名称与代码随交易一并返回。"""
     stmt = select(Trade).order_by(
         Trade.executed_at.desc(), Trade.created_at.desc(), Trade.id.desc()
     )
     if account_id:
-        stmt = stmt.where(Trade.account_id == account_id)
+        resolved = resolve_account(session, account_id, user_id=current_user.id)
+        stmt = stmt.where(Trade.account_id == resolved)
+    else:
+        user_account_ids = resolve_user_account_ids(session, current_user.id)
+        if not user_account_ids:
+            return []
+        stmt = stmt.where(Trade.account_id.in_(user_account_ids))
     if security_id:
         stmt = stmt.where(Trade.security_id == security_id)
     if not include_voided:
@@ -370,10 +442,18 @@ def list_trades(
 
 
 @router.post("/trades/buy", status_code=status.HTTP_201_CREATED)
-def record_buy(payload: BuyTradeRequest, actor: str | None = Depends(request_actor), session: Session = Depends(get_db)) -> dict[str, Any]:
+def record_buy(
+    payload: BuyTradeRequest,
+    current_user: User = Depends(get_current_user),
+    actor: str = Depends(request_actor),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """为当前用户记录买入成交并生成对应批次。"""
     begin_write(session)
     try:
-        account, strategy = _resolve_trade_scope(session, payload.account_id, payload.strategy_id, payload.security_id)
+        account, strategy = _resolve_trade_scope(
+            session, current_user.id, payload.account_id, payload.strategy_id, payload.security_id
+        )
         trade = TradeLedgerService(session, actor=actor).buy(account_id=account, security_id=payload.security_id, strategy_id=strategy, executed_at=payload.executed_at, qty=payload.qty, price=payload.price, fees=fees_from(payload), client_request_id=payload.client_request_id, source=payload.source, external_trade_id=payload.external_trade_id, import_batch_id=payload.import_batch_id, memo=payload.memo, commit=False)
         finish_write(session, True)
         return trade_data(trade)
@@ -392,11 +472,12 @@ def _requested_match(item: MatchRequestRead) -> MatchRequest:
 
 def _preview_allocations(
     session: Session,
+    user_id: str,
     payload: SellPreviewRequest,
 ) -> tuple[str, list[dict[str, Any]]]:
     """生成卖出预览批次，并附加关联买入交易的真实成交信息。"""
     account, strategy = _resolve_trade_scope(
-        session, payload.account_id, payload.strategy_id, payload.security_id
+        session, user_id, payload.account_id, payload.strategy_id, payload.security_id
     )
     account_record = session.get(Account, account)
     if account_record is None:
@@ -474,9 +555,13 @@ def _preview_allocations(
 
 
 @router.post("/trades/sell/preview")
-def preview_sell(payload: SellPreviewRequest, session: Session = Depends(get_db)) -> dict[str, Any]:
+def preview_sell(
+    payload: SellPreviewRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
     """返回卖出金额、真实买入批次及服务端计算的分摊结果。"""
-    currency, allocations = _preview_allocations(session, payload)
+    currency, allocations = _preview_allocations(session, current_user.id, payload)
     calculation = AccountingService.calculate_sell(payload.qty, payload.price, fees_from(payload))
     realized_pnl = sum(
         (Decimal(item["realizedPnl"]) for item in allocations),
@@ -496,12 +581,17 @@ def preview_sell(payload: SellPreviewRequest, session: Session = Depends(get_db)
 
 
 @router.post("/trades/sell", status_code=status.HTTP_201_CREATED)
-def record_sell(payload: SellTradeRequest, actor: str | None = Depends(request_actor), session: Session = Depends(get_db)) -> dict[str, Any]:
+def record_sell(
+    payload: SellTradeRequest,
+    current_user: User = Depends(get_current_user),
+    actor: str = Depends(request_actor),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
     """确认卖出并按明确批次或指定自动策略更新账务。"""
     begin_write(session)
     try:
         account, strategy = _resolve_trade_scope(
-            session, payload.account_id, payload.strategy_id, payload.security_id
+            session, current_user.id, payload.account_id, payload.strategy_id, payload.security_id
         )
         matches = (
             None
@@ -536,12 +626,14 @@ def record_sell(payload: SellTradeRequest, actor: str | None = Depends(request_a
 def edit_trade(
     trade_id: str,
     payload: TradeUpdateRequest,
-    actor: str | None = Depends(request_actor),
+    current_user: User = Depends(get_current_user),
+    actor: str = Depends(request_actor),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """更正原始流水并原子标记范围待刷新，不在保存时重算。"""
     begin_write(session)
     try:
+        resolve_user_trade(session, trade_id, user_id=current_user.id)
         trade = TradeLedgerService(session, actor=actor).edit_trade(
             trade_id,
             revision=payload.revision,
@@ -561,9 +653,17 @@ def edit_trade(
 
 
 @router.post("/trades/{trade_id}/void")
-def void_trade(trade_id: str, payload: VoidTradeRequest | None = None, actor: str | None = Depends(request_actor), session: Session = Depends(get_db)) -> dict[str, Any]:
+def void_trade(
+    trade_id: str,
+    payload: VoidTradeRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    actor: str = Depends(request_actor),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """撤销归属于当前用户的原始成交记录。"""
     begin_write(session)
     try:
+        resolve_user_trade(session, trade_id, user_id=current_user.id)
         trade = TradeLedgerService(session, actor=actor).void_trade(trade_id, reason=payload.reason if payload else None, commit=False)
         finish_write(session, True)
         return trade_data(trade)
@@ -573,8 +673,14 @@ def void_trade(trade_id: str, payload: VoidTradeRequest | None = None, actor: st
 
 
 @router.get("/positions")
-def list_positions(account_id: str | None = Query(default=None, alias="accountId"), include_closed: bool = Query(default=False, alias="includeClosed"), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    account_id = resolve_account(session, account_id)
+def list_positions(
+    account_id: str | None = Query(default=None, alias="accountId"),
+    include_closed: bool = Query(default=False, alias="includeClosed"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """返回当前用户指定账户的持仓汇总列表。"""
+    account_id = resolve_account(session, account_id, user_id=current_user.id)
     stmt = select(Lot).where(Lot.account_id == account_id)
     if not include_closed:
         stmt = stmt.where(Lot.status == "OPEN")
@@ -618,10 +724,11 @@ def list_lots(
     account_id: str | None = Query(default=None, alias="accountId"),
     strategy_id: str | None = Query(default=None, alias="strategyId"),
     include_closed: bool = Query(default=False, alias="includeClosed"),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """倒序返回批次估值、范围待刷新状态及可选的闭仓买卖分摊明细。"""
-    account = resolve_account(session, account_id)
+    account = resolve_account(session, account_id, user_id=current_user.id)
     strategy = resolve_strategy(session, account, strategy_id)
     security = _security_or_404(session, security_id)
     stmt = (
@@ -723,16 +830,26 @@ def list_lots(
 
 
 @router.get("/lots/{lot_id}/matches")
-def list_lot_matches(lot_id: str, session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    lot = session.get(Lot, lot_id)
-    if lot is None:
-        raise EntityNotFoundError("lot was not found", details={"lot_id": lot_id})
+def list_lot_matches(
+    lot_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """返回归属当前用户的持仓批次有效卖出配对记录。"""
+    lot = resolve_user_lot(session, lot_id, user_id=current_user.id)
     return [match_data(match) for match in lot.matches if match.sell_trade is None or match.sell_trade.status == TradeStatus.ACTIVE.value]
 
 
 @router.get("/cycles")
-def list_cycles(account_id: str | None = Query(default=None, alias="accountId"), security_id: str | None = Query(default=None, alias="securityId"), include_closed: bool = Query(default=False, alias="includeClosed"), session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    account = resolve_account(session, account_id)
+def list_cycles(
+    account_id: str | None = Query(default=None, alias="accountId"),
+    security_id: str | None = Query(default=None, alias="securityId"),
+    include_closed: bool = Query(default=False, alias="includeClosed"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """返回当前用户指定账户的持仓周期列表。"""
+    account = resolve_account(session, account_id, user_id=current_user.id)
     stmt = select(Cycle).where(Cycle.account_id == account).order_by(Cycle.opened_at)
     if security_id:
         stmt = stmt.where(Cycle.security_id == security_id)
@@ -742,23 +859,27 @@ def list_cycles(account_id: str | None = Query(default=None, alias="accountId"),
 
 
 @router.get("/lots/{lot_id}/targets")
-def list_targets(lot_id: str, session: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    lot = session.get(Lot, lot_id)
-    if lot is None:
-        raise EntityNotFoundError("lot was not found", details={"lot_id": lot_id})
+def list_targets(
+    lot_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """返回归属当前用户的批次显式止盈目标列表。"""
+    lot = resolve_user_lot(session, lot_id, user_id=current_user.id)
     return [target_data(target) for target in lot.targets]
 
 
 @router.post("/lots/{lot_id}/targets", status_code=status.HTTP_201_CREATED)
 def create_target(
-    lot_id: str, payload: ProfitTargetCreate, session: Session = Depends(get_db)
+    lot_id: str,
+    payload: ProfitTargetCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """新增显式分段目标，已取消或完成的目标不占用当前计划股数。"""
     begin_write(session)
     try:
-        lot = session.get(Lot, lot_id)
-        if lot is None:
-            raise EntityNotFoundError("lot was not found", details={"lot_id": lot_id})
+        lot = resolve_user_lot(session, lot_id, user_id=current_user.id)
         planned = round_qty(
             sum(
                 (
@@ -805,14 +926,15 @@ def create_target(
 
 @router.patch("/targets/{target_id}")
 def update_target(
-    target_id: str, payload: ProfitTargetPatch, session: Session = Depends(get_db)
+    target_id: str,
+    payload: ProfitTargetPatch,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """修改显式目标并排除已取消目标的计划量。"""
     begin_write(session)
     try:
-        target = session.get(ProfitTarget, target_id)
-        if target is None:
-            raise EntityNotFoundError("target was not found", details={"target_id": target_id})
+        target = resolve_user_target(session, target_id, user_id=current_user.id)
         lot = target.lot
         values = payload.model_dump(exclude_unset=True)
         planned = values.get("planned_sell_qty", target.planned_sell_qty)
@@ -859,12 +981,15 @@ def update_target(
 
 
 @router.delete("/targets/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_target(target_id: str, session: Session = Depends(get_db)) -> None:
+def delete_target(
+    target_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """取消归属当前用户的显式止盈目标。"""
     begin_write(session)
     try:
-        target = session.get(ProfitTarget, target_id)
-        if target is None:
-            raise EntityNotFoundError("target was not found", details={"target_id": target_id})
+        target = resolve_user_target(session, target_id, user_id=current_user.id)
         target.status = "CANCELLED"
         session.flush()
         finish_write(session, True)
@@ -876,10 +1001,11 @@ def delete_target(target_id: str, session: Session = Depends(get_db)) -> None:
 @router.get("/analytics/summary")
 def analytics_summary(
     account_id: str | None = Query(default=None, alias="accountId"),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """返回交易事实汇总及可用持仓估值。"""
-    account = resolve_account(session, account_id)
+    account = resolve_account(session, account_id, user_id=current_user.id)
     account_row = session.get(Account, account)
     if account_row is None:
         raise EntityNotFoundError("account was not found", details={"account_id": account})
@@ -946,10 +1072,11 @@ def _save_setting(
     session: Session,
     payload: ProfitSettingWrite,
     *,
+    user_id: str,
     security_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """在调用方写事务内保存或清除唯一覆盖值，不复制到任何批次。"""
-    key = ProfitSettingsService.scope_key(security_id)
+    """在调用方写事务内保存或清除当前用户的唯一止盈覆盖值，不复制到任何批次。"""
+    key = ProfitSettingsService.scope_key(security_id, user_id=user_id)
     setting = session.get(ProfitSetting, key)
     if payload.target_return_pct is None:
         if setting is not None:
@@ -957,7 +1084,7 @@ def _save_setting(
         session.flush()
         return None
     if setting is None:
-        setting = ProfitSetting(scope_key=key, security_id=security_id)
+        setting = ProfitSetting(scope_key=key, user_id=user_id, security_id=security_id)
         session.add(setting)
     setting.target_return_pct = round_price(payload.target_return_pct)
     setting.calculation_basis = payload.calculation_basis
@@ -967,20 +1094,26 @@ def _save_setting(
 
 
 @router.get("/profit-settings")
-def get_global_profit_setting(session: Session = Depends(get_db)) -> dict[str, Any] | None:
-    """读取全应用唯一的全局止盈默认值。"""
-    return setting_data(session.get(ProfitSetting, ProfitSettingsService.scope_key()))
+def get_global_profit_setting(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """读取当前用户的全局止盈默认值。"""
+    return setting_data(
+        session.get(ProfitSetting, ProfitSettingsService.scope_key(user_id=current_user.id))
+    )
 
 
 @router.put("/profit-settings")
 def save_global_profit_setting(
     payload: ProfitSettingWrite,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any] | None:
-    """覆盖或清除全局设置，读取继承该值的批次时即时生效。"""
+    """覆盖或清除当前用户全局止盈设置，读取继承该值的批次时即时生效。"""
     begin_write(session)
     try:
-        result = _save_setting(session, payload)
+        result = _save_setting(session, payload, user_id=current_user.id)
         finish_write(session, True)
         return result
     except Exception:
@@ -991,24 +1124,33 @@ def save_global_profit_setting(
 @router.get("/securities/{security_id}/profit-settings")
 def get_security_profit_setting(
     security_id: str,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any] | None:
-    """读取个股本层覆盖；null 表示使用全局，不写入继承副本。"""
+    """读取当前用户的个股本层止盈覆盖；null 表示使用用户全局，不写入继承副本。"""
     _security_or_404(session, security_id)
-    return setting_data(session.get(ProfitSetting, ProfitSettingsService.scope_key(security_id)))
+    return setting_data(
+        session.get(
+            ProfitSetting,
+            ProfitSettingsService.scope_key(security_id, user_id=current_user.id),
+        )
+    )
 
 
 @router.put("/securities/{security_id}/profit-settings")
 def save_security_profit_setting(
     security_id: str,
     payload: ProfitSettingWrite,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any] | None:
-    """保存个股覆盖，收益率为空时恢复全局继承。"""
+    """保存当前用户的个股止盈覆盖，收益率为空时恢复全局继承。"""
     begin_write(session)
     try:
         _security_or_404(session, security_id)
-        result = _save_setting(session, payload, security_id=security_id)
+        result = _save_setting(
+            session, payload, user_id=current_user.id, security_id=security_id
+        )
         finish_write(session, True)
         return result
     except Exception:
@@ -1021,13 +1163,16 @@ def recalculate_security(
     security_id: str,
     account_id: str | None = Query(default=None, alias="accountId"),
     strategy_id: str | None = Query(default=None, alias="strategyId"),
-    actor: str | None = Depends(request_actor),
+    current_user: User = Depends(get_current_user),
+    actor: str = Depends(request_actor),
     session: Session = Depends(get_db),
 ) -> dict[str, int]:
     """原子清理并重建指定持仓派生数据，不修改交易事实或其他持仓。"""
     begin_write(session)
     try:
-        account, strategy = _resolve_trade_scope(session, account_id, strategy_id, security_id)
+        account, strategy = _resolve_trade_scope(
+            session, current_user.id, account_id, strategy_id, security_id
+        )
         result = RecalculationService(session, actor=actor).rebuild(
             account_id=account,
             security_id=security_id,
@@ -1044,16 +1189,18 @@ def recalculate_security(
 async def list_quotes(
     symbols: str | None = Query(default=None),
     refresh: bool = Query(default=False),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Return shared cache snapshots; refreshes are serialized by QuoteCollector."""
+    """返回共享行情缓存快照，未指定证券代码时仅扫描当前用户的持仓与自选范围。"""
     quote_service = quote_collector.service
     if symbols:
         requested = [value.strip() for value in symbols.split(",") if value.strip()]
         security_map = quote_service.securities_for_symbols(session, requested)
         securities = list(security_map.values())
     else:
-        security_map = quote_service.symbols_for_scope(session)
+        user_account_ids = resolve_user_account_ids(session, current_user.id)
+        security_map = quote_service.symbols_for_scope(session, account_ids=user_account_ids)
         securities = list(security_map.values())
         requested = list(security_map)
     snapshots = await quote_collector.collect(session, securities, refresh=refresh)
@@ -1086,10 +1233,11 @@ async def dashboard(
     account_id: str | None = Query(default=None, alias="accountId"),
     include_closed: bool = Query(default=False, alias="includeClosed"),
     mode: Literal["cache", "auto", "manual"] = Query(default="auto"),
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """返回账务、持仓、行情和汇总来自同一估值切片的首页数据。"""
-    resolved_account_id = resolve_account(session, account_id)
+    resolved_account_id = resolve_account(session, account_id, user_id=current_user.id)
     service = DashboardService(quote_collector)
     return await service.build(
         session,

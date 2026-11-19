@@ -21,4 +21,18 @@ body { margin: 0; min-width: 1080px; }
 .security-link { color:#2563eb; text-decoration:none; font-weight:600; }.empty { padding:36px; text-align:center; color:#8b98aa; }
 .position-name { display:block; color:#8290a3; font-size:12px; font-weight:400; margin-top:3px; }
 .position-table .el-table__cell { vertical-align:top; }.pnl-value { font-weight:700; }.pnl-rate { font-size:12px; margin-top:3px; }.lowest-group { line-height:1.55; }.lowest-group .muted { display:block; line-height:1.45; margin:2px 0; }.group-pnl { font-size:12px; font-weight:600; }
+.topbar-user { display:flex; align-items:center; gap:14px; }
+.user-meta { display:flex; align-items:center; gap:8px; }
+.user-email { color:#344054; font-size:13px; font-weight:600; }
+.auth-screen { min-height:100vh; display:grid; place-items:center; background:radial-gradient(circle at top, #eef3fb 0%, #f4f7fb 55%, #e9eff8 100%); padding:24px; }
+.auth-card { width:100%; max-width:440px; border:0; border-radius:16px; box-shadow:0 16px 40px #11182714; padding:10px 8px; }
+.auth-brand { display:flex; align-items:center; gap:12px; margin-bottom:22px; }
+.auth-brand strong { display:block; font-size:16px; color:#111827; }
+.auth-brand small { display:block; font-size:12px; color:#7b8798; margin-top:2px; }
+.auth-title { margin:0 0 6px; font-size:22px; color:#182230; }
+.auth-subtitle { margin:0 0 18px; color:#7b8798; font-size:13px; line-height:1.6; }
+.code-row { display:flex; gap:10px; width:100%; }
+.code-row .el-input { flex:1; }
+.auth-submit { width:100%; margin-top:6px; }
+.invite-form { margin-bottom:8px; }
 @media (max-width: 1200px) { body { min-width: 900px; }.metric-grid { grid-template-columns:repeat(2,1fr); }.quote-grid { grid-template-columns:repeat(2,1fr); } }

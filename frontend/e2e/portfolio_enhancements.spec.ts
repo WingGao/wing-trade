@@ -33,6 +33,7 @@ async function mockDetail(page: Page) {
     const url = new URL(route.request().url())
     const path = url.pathname.replace('/api/v1', '')
     const method = route.request().method()
+    if (path === '/auth/me') return respond(route, { user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } })
     if (path === '/accounts') return respond(route, [{ id: 'account-cny', name: 'A股账户', currency: 'CNY' }, { id: 'account-usd', name: '美股账户', currency: 'USD' }])
     if (path === '/securities') return respond(route, [security])
     if (path === '/trades') return respond(route, [])
@@ -88,6 +89,7 @@ test('看板展示完整市值并通过外部查询取得证券名称', async ({
   let createdName = ''
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
+    if (path === '/auth/me') return respond(route, { user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } })
     if (path === '/dashboard') return respond(route, dashboard())
     if (path === '/accounts') return respond(route, [{ id: 'account-cny', name: 'A股账户', currency: 'CNY' }])
     if (path === '/securities/lookup') { lookupCalls += 1; return respond(route, { securities: [{ market: 'SH', symbol: '600519', name: '外部名称贵州茅台', currency: 'CNY' }], error: null }) }
@@ -237,6 +239,7 @@ test('详情每三秒刷新，隐藏和离页停止，重建必须经过确认',
 })
 
 test('交易证券显示代码名称，内部编号只保留提示，股数为整数', async ({ page }) => {
+  await page.route('**/api/v1/auth/me', (route) => respond(route, { user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } }))
   await page.route('**/api/v1/securities**', (route) => respond(route, [security]))
   await page.route('**/api/v1/trades', (route) => respond(route, [{ id: 'trade-1', securityId: security.id, executedAt: '2026-11-17T02:00:00Z', side: 'BUY', qty: '100.0000', price: '10.123', feesTotal: '0', status: 'ACTIVE' }]))
   await page.goto('/trades')
@@ -310,6 +313,7 @@ test('外部查名失败保留本地证券结果并明确提示', async ({ page 
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
     if (path === '/accounts') return respond(route, [{ id: 'account-cny', name: 'A股账户', currency: 'CNY' }])
+    if (path === '/auth/me') return respond(route, { user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } })
     if (path === '/dashboard') return respond(route, dashboard())
     if (path === '/securities/lookup') { lookups += 1; return respond(route, { securities: [], error: '外部接口暂不可用，本地结果可继续使用' }) }
     if (path === '/securities') return respond(route, [security])

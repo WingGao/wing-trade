@@ -36,6 +36,7 @@ async function mockSettledPage(page: Page) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace('/api/v1', '')
+    if (path === '/auth/me') return respond(route, { user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } })
     if (path === '/accounts') return respond(route, [{ id: 'account-a', name: '主账户', currency: 'CNY' }, { id: 'account-b', name: '第二账户', currency: 'CNY' }])
     if (path === '/securities') return respond(route, securities)
     if (path.endsWith('/intraday')) return respond(route, { symbol: 'SH:600519', currency: 'CNY', tradingDate: '2026-11-17', points: [{ time: '2026-11-17T01:30:00Z', price: '10.123000' }, { time: '2026-11-17T02:00:00Z', price: '10.250000' }], quote: null, provider: 'fixture', fetchedAt: '2026-11-17T02:00:00Z', isStale: false, error: null })

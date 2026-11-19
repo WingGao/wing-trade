@@ -17,8 +17,9 @@ from app.api.errors import (
 from app.api.v1.router import router
 from app.config import normalize_log_level, settings
 from app.db.migrations import prepare_database_schema
-from app.db.session import engine, healthcheck
+from app.db.session import SessionLocal, engine, healthcheck
 from app.domain.exceptions import DomainError
+from app.services.auth_bootstrap import ensure_default_admin_and_backfill
 
 logger = logging.getLogger("ashare_ledger.api")
 
@@ -66,8 +67,12 @@ def create_app(*, create_tables: bool = True) -> FastAPI:
 
     @application.on_event("startup")
     def startup() -> None:
+        """启动时完成数据库迁移、默认管理员初始化及存量数据无损回填。"""
         if create_tables:
             prepare_database_schema(engine)
+            with SessionLocal() as session:
+                ensure_default_admin_and_backfill(session, settings.default_admin_email)
+                session.commit()
 
     @application.get("/health")
     def health() -> dict[str, str]:

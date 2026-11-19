@@ -52,6 +52,8 @@ def context(tmp_path: Path) -> Generator[Context, None, None]:
 
 def client_for(session: Session, *, raise_server_exceptions: bool = True) -> TestClient:
     """HTTP 依赖只返回当前临时会话，应用启动不创建默认真实账本。"""
+    from tests.auth_helpers import attach_default_admin_auth
+
     application = create_app(create_tables=False)
 
     def override_db() -> Generator[Session, None, None]:
@@ -59,6 +61,7 @@ def client_for(session: Session, *, raise_server_exceptions: bool = True) -> Tes
         yield session
 
     application.dependency_overrides[get_db] = override_db
+    attach_default_admin_auth(application, session)
     return TestClient(application, raise_server_exceptions=raise_server_exceptions)
 
 

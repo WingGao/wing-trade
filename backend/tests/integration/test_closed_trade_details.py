@@ -44,6 +44,10 @@ def settled_context() -> Generator[tuple[Session, Scope], None, None]:
         session.flush()
         strategy = Strategy(account_id=account.id, name="DEFAULT")
         session.add(strategy)
+        from app.config import DEFAULT_DEV_ADMIN_EMAIL
+        from app.services.auth_bootstrap import ensure_default_admin_and_backfill
+
+        ensure_default_admin_and_backfill(session, DEFAULT_DEV_ADMIN_EMAIL)
         session.commit()
         yield session, Scope(account.id, security.id, strategy.id)
     engine.dispose()
@@ -51,13 +55,21 @@ def settled_context() -> Generator[tuple[Session, Scope], None, None]:
 
 def _client(session: Session) -> TestClient:
     """将测试 API 的会话依赖指向同一隔离内存数据库。"""
+    from sqlalchemy import select
+
+    from app.api.deps import get_current_user
+    from app.models.auth import User
+
     application = create_app(create_tables=False)
+    admin = session.scalar(select(User).where(User.is_default_admin.is_(True)).limit(1))
+    assert admin is not None
 
     def override_db() -> Generator[Session, None, None]:
         """由夹具管理会话生命周期，避免访问应用默认数据库。"""
         yield session
 
     application.dependency_overrides[get_db] = override_db
+    application.dependency_overrides[get_current_user] = lambda: admin
     return TestClient(application)
 
 
@@ -267,7 +279,12 @@ def test_closed_details_include_every_active_buy_and_partial_sell_without_double
 def test_closed_details_are_isolated_by_account_security_and_strategy(settled_context) -> None:
     """相同证券的其他账户/策略及相同账户的其他证券不能混入明细。"""
     session, scope = settled_context
-    account = Account(name="其他账户", currency="CNY")
+    owner = session.get(Account, scope.account_id)
+    account = Account(
+        user_id=owner.user_id if owner is not None else None,
+        name="其他账户",
+        currency="CNY",
+    )
     security = Security(market="SZ", symbol="000001", name="平安银行")
     session.add_all([account, security])
     session.flush()

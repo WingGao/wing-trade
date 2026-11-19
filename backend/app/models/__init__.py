@@ -1,5 +1,6 @@
 """SQLAlchemy persistence models."""
 
+from .auth import EmailVerificationCode, User, UserSession
 from .ledger import (
     Account,
     AuditEvent,
@@ -22,6 +23,7 @@ __all__ = [
     "AuditEvent",
     "Base",
     "Cycle",
+    "EmailVerificationCode",
     "Lot",
     "PositionRefreshState",
     "ProfitSetting",
@@ -31,5 +33,7 @@ __all__ = [
     "Strategy",
     "Trade",
     "TradeMatch",
+    "User",
+    "UserSession",
     "WatchlistItem",
 ]

@@ -89,6 +89,8 @@ def _sell(context: tuple[Session, Account, Security, Strategy], *, day: int, qty
 
 def _api(session: Session) -> TestClient:
     """将 HTTP 依赖指向当前隔离数据库。"""
+    from tests.auth_helpers import attach_default_admin_auth
+
     application = create_app(create_tables=False)
 
     def override_db() -> Generator[Session, None, None]:
@@ -96,6 +98,7 @@ def _api(session: Session) -> TestClient:
         yield session
 
     application.dependency_overrides[get_db] = override_db
+    attach_default_admin_auth(application, session)
     return TestClient(application)
 
 

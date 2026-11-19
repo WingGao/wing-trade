@@ -55,19 +55,27 @@ def test_refresh_migration_preserves_all_old_rows_and_reverses(tmp_path: Path) -
 
     migrate("0002_profit_settings")
     engine = create_engine_for_url(environment["DATABASE_URL"])
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO accounts (id, name, broker, currency, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("acc-old", "旧账户", None, "CNY", "2026-11-01T00:00:00+00:00"),
+        )
+        connection.execute(
+            "INSERT INTO securities (id, market, symbol, name, security_type, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("sec-old", "SH", "600519", "贵州茅台", "STOCK", "ACTIVE", "2026-11-01T00:00:00+00:00"),
+        )
+        connection.execute(
+            "INSERT INTO strategies (id, account_id, name, created_at) VALUES (?, ?, ?, ?)",
+            ("str-old", "acc-old", "DEFAULT", "2026-11-01T00:00:00+00:00"),
+        )
+        connection.commit()
     with Session(engine, expire_on_commit=False) as session:
-        account = Account(name="旧账户", currency="CNY")
-        security = Security(market="SH", symbol="600519", name="贵州茅台")
-        session.add_all([account, security])
-        session.flush()
-        strategy = Strategy(account_id=account.id, name="DEFAULT")
-        session.add(strategy)
-        session.flush()
         service = TradeLedgerService(session)
         service.buy(
-            account_id=account.id,
-            security_id=security.id,
-            strategy_id=strategy.id,
+            account_id="acc-old",
+            security_id="sec-old",
+            strategy_id="str-old",
             executed_at=datetime(2026, 11, 1, tzinfo=UTC),
             qty="10",
             price="10.123456",
@@ -75,17 +83,17 @@ def test_refresh_migration_preserves_all_old_rows_and_reverses(tmp_path: Path) -
             client_request_id="migration-existing",
         )
         service.sell(
-            account_id=account.id,
-            security_id=security.id,
-            strategy_id=strategy.id,
+            account_id="acc-old",
+            security_id="sec-old",
+            strategy_id="str-old",
             executed_at=datetime(2026, 11, 2, tzinfo=UTC),
             qty="3",
             price="11",
         )
-        scope = account.id, security.id, strategy.id
+        scope = "acc-old", "sec-old", "str-old"
     engine.dispose()
     before = original_rows()
-    migrate("head")
+    migrate("0003_position_refresh_states")
     assert original_rows() == before
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys=ON")
@@ -99,6 +107,7 @@ def test_refresh_migration_preserves_all_old_rows_and_reverses(tmp_path: Path) -
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(sql, ("state-2", *scope, True, "2026-11-18T01:00:00"))
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    migrate("head")
     migrate("0002_profit_settings", downgrade=True)
     assert original_rows() == before
     with sqlite3.connect(database) as connection:

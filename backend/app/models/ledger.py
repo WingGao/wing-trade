@@ -28,8 +28,10 @@ def utcnow() -> datetime:
 
 class Account(Base):
     __tablename__ = "accounts"
+    __table_args__ = (Index("ix_accounts_user_id", "user_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     broker: Mapped[str | None] = mapped_column(String(128))
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
@@ -231,14 +233,18 @@ class ProfitTarget(Base):
 
 
 class ProfitSetting(Base):
-    """全局单例或单个证券的止盈默认值，不为继承批次复制记录。"""
+    """按用户隔离的全局或单个证券止盈默认值，不为继承批次复制记录。"""
 
     __tablename__ = "profit_settings"
     __table_args__ = (
-        UniqueConstraint("security_id", name="uq_profit_settings_security"),
+        UniqueConstraint("user_id", "security_id", name="uq_profit_settings_user_security"),
+        Index("ix_profit_settings_user_id", "user_id"),
     )
 
-    scope_key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    scope_key: Mapped[str] = mapped_column(String(96), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
     security_id: Mapped[str | None] = mapped_column(
         ForeignKey("securities.id", ondelete="CASCADE")
     )

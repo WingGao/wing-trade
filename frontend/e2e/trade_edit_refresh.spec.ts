@@ -47,6 +47,7 @@ async function mockTrading(page: Page) {
     const url = new URL(route.request().url())
     const path = url.pathname.replace('/api/v1', '')
     const method = route.request().method()
+    if (path === '/auth/me') return respond(route, { user: { id: 'admin-1', email: 'admin@localhost', displayName: '默认管理员', role: 'ADMIN', status: 'ACTIVE', isDefaultAdmin: true, createdAt: '2026-11-18T00:00:00Z' } })
     if (path === '/accounts') return respond(route, [{ id: accountId, name: '主账户', currency: 'CNY' }, { id: 'account-secondary', name: '另一个账户', currency: 'CNY' }])
     if (path === '/securities') return respond(route, [security])
     if (path === '/dashboard') { state.dashboardRequests.push(url); return respond(route, snapshot()) }

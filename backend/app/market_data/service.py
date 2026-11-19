@@ -37,15 +37,28 @@ class QuoteService:
         rows = session.scalars(select(Security)).all()
         return {self.security_symbol(row): row for row in rows if self.security_symbol(row) in wanted}
 
-    def symbols_for_scope(self, session: Session) -> dict[str, Security]:
-        """返回现有持仓和自选范围对应的证券映射。"""
+    def symbols_for_scope(
+        self,
+        session: Session,
+        *,
+        account_ids: Sequence[str] | None = None,
+    ) -> dict[str, Security]:
+        """返回指定账户范围（或全库）持仓和自选对应的证券映射。"""
+        if account_ids is not None and len(account_ids) == 0:
+            return {}
         rows = session.scalars(select(Security)).all()
-        watch_ids = set(session.scalars(select(Lot.security_id).where(Lot.status == "OPEN")).all())
+        lot_stmt = select(Lot.security_id).where(Lot.status == "OPEN")
+        if account_ids is not None:
+            lot_stmt = lot_stmt.where(Lot.account_id.in_(account_ids))
+        watch_ids = set(session.scalars(lot_stmt).all())
         # Include watchlist securities without introducing an ORM relationship
         # dependency, keeping the service compatible with the existing schema.
         from app.models.ledger import WatchlistItem
 
-        watch_ids.update(session.scalars(select(WatchlistItem.security_id)).all())
+        watch_stmt = select(WatchlistItem.security_id)
+        if account_ids is not None:
+            watch_stmt = watch_stmt.where(WatchlistItem.account_id.in_(account_ids))
+        watch_ids.update(session.scalars(watch_stmt).all())
         return {self.security_symbol(row): row for row in rows if row.id in watch_ids}
 
     def read_cached(self, session: Session, securities: Iterable[Security], *, now: datetime | None = None) -> list[QuoteSnapshot]:

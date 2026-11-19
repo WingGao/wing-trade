@@ -17,15 +17,38 @@ def error_payload(code: str, message: str, details: dict[str, Any] | None = None
 
 def _status_for_code(code: str) -> int:
     """将稳定领域错误码映射为统一 HTTP 状态。"""
+    if code == "UNAUTHORIZED":
+        return 401
+    if code == "FORBIDDEN":
+        return 403
     if code in {"NOT_FOUND", "TRADE_NOT_FOUND"}:
         return 404
     if code in {
-        "INSUFFICIENT_LOT_QTY", "LOT_HAS_ACTIVE_MATCHES", "DUPLICATE_TRADE",
-        "TRADE_REVISION_CONFLICT", "TRADE_NOT_EDITABLE",
+        "INSUFFICIENT_LOT_QTY",
+        "LOT_HAS_ACTIVE_MATCHES",
+        "DUPLICATE_TRADE",
+        "TRADE_REVISION_CONFLICT",
+        "TRADE_NOT_EDITABLE",
+        "USER_ALREADY_EXISTS",
     }:
         return 409
-    if code in {"VALIDATION_ERROR", "INVALID_QUANTITY", "INVALID_PRICE", "NEGATIVE_FEE", "FUTURE_LOT", "MATCH_QUANTITY_MISMATCH", "LOT_OWNERSHIP_MISMATCH", "ACCOUNT_CURRENCY_MISMATCH"}:
+    if code in {
+        "VALIDATION_ERROR",
+        "INVALID_QUANTITY",
+        "INVALID_PRICE",
+        "NEGATIVE_FEE",
+        "FUTURE_LOT",
+        "MATCH_QUANTITY_MISMATCH",
+        "LOT_OWNERSHIP_MISMATCH",
+        "ACCOUNT_CURRENCY_MISMATCH",
+        "INVALID_EMAIL",
+        "INVALID_VERIFICATION_CODE",
+        "VERIFICATION_CODE_EXPIRED",
+        "VERIFICATION_CODE_ATTEMPTS_EXCEEDED",
+    }:
         return 422
+    if code == "VERIFICATION_CODE_COOLDOWN":
+        return 429
     return 400
 
 

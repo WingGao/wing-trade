@@ -7,7 +7,7 @@ from sqlalchemy.engine import Connection
 
 from alembic import context
 from app.config import settings
-from app.models.ledger import Base
+from app.models import Base
 
 config = context.config
 if config.config_file_name is not None:

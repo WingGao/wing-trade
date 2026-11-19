@@ -62,7 +62,11 @@ def market_client(monkeypatch):
         with factory() as session:
             yield session
 
+    from tests.auth_helpers import attach_default_admin_auth
+
     application.dependency_overrides[get_db] = override_db
+    with factory() as setup_session:
+        attach_default_admin_auth(application, setup_session)
     with TestClient(application) as client:
         yield client, failures, calls, clock
     engine.dispose()

@@ -16,6 +16,7 @@ from app.api.deps import get_db  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import create_engine_for_url  # noqa: E402
 from app.main import create_app  # noqa: E402
+from tests.auth_helpers import attach_default_admin_auth  # noqa: E402
 
 
 @pytest.fixture
@@ -32,6 +33,8 @@ def api_client():
             yield session
 
     application.dependency_overrides[get_db] = override_db
+    with factory() as setup_session:
+        attach_default_admin_auth(application, setup_session)
     with TestClient(application) as client:
         yield client
 
