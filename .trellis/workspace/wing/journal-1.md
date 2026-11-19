@@ -331,3 +331,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: 后端日志等级支持环境变量配置
+<!-- trellis-session: v=2 fp=1496762a1ed9a448 -->
+
+**Date**: 2026-11-20
+**Task**: 后端日志等级支持环境变量配置
+**Branch**: `master`
+
+### Summary
+
+新增 LOG_LEVEL 统一控制应用与 Uvicorn 日志等级，补充配置校验、Compose 透传、测试和日志规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b5f8bf6` | feat: 支持环境变量配置后端日志等级 |
+
+### Status
+
+[OK] **Completed**
