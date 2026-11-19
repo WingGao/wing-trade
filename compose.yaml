@@ -12,6 +12,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ashare_dev_password}
       QUOTE_PROVIDER: ${QUOTE_PROVIDER:-eastmoney}
       QUOTE_TIMEOUT_SECONDS: ${QUOTE_TIMEOUT_SECONDS:-5}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./data:/app/data
     depends_on:

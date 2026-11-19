@@ -10,6 +10,16 @@ from sqlalchemy.engine import URL
 
 SUPPORTED_DATABASE_BACKENDS = frozenset({"sqlite", "mysql"})
 SUPPORTED_QUOTE_PROVIDERS = frozenset({"eastmoney", "mock"})
+SUPPORTED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+
+def normalize_log_level(value: str) -> str:
+    """将日志等级规范为大写，并拒绝 Python 标准等级之外的值。"""
+    normalized = value.strip().upper()
+    if normalized not in SUPPORTED_LOG_LEVELS:
+        allowed = ", ".join(sorted(SUPPORTED_LOG_LEVELS))
+        raise ValueError(f"LOG_LEVEL must be one of: {allowed}")
+    return normalized
 
 
 def _required_env(name: str, *, trim: bool = True) -> str:
@@ -49,11 +59,13 @@ def _mysql_database_url_from_env() -> str:
 class Settings:
     database_url: str = "sqlite:///./ledger.db"
     echo_sql: bool = False
+    log_level: str = "INFO"
     quote_provider: str = "eastmoney"
     quote_timeout_seconds: Decimal = Decimal("5")
 
     def __post_init__(self) -> None:
-        """校验直接构造或环境变量来源的行情配置。"""
+        """校验直接构造或环境变量来源的日志与行情配置。"""
+        log_level = normalize_log_level(self.log_level)
         provider = self.quote_provider.strip().lower()
         if provider not in SUPPORTED_QUOTE_PROVIDERS:
             allowed = ", ".join(sorted(SUPPORTED_QUOTE_PROVIDERS))
@@ -72,6 +84,7 @@ class Settings:
             raise ValueError("QUOTE_TIMEOUT_SECONDS must be a finite positive number")
         object.__setattr__(self, "quote_provider", provider)
         object.__setattr__(self, "quote_timeout_seconds", timeout)
+        object.__setattr__(self, "log_level", log_level)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -94,6 +107,7 @@ class Settings:
         return cls(
             database_url=explicit_database_url or cls._database_url_from_env(defaults.database_url),
             echo_sql=os.getenv("ECHO_SQL", "0").lower() in {"1", "true", "yes"},
+            log_level=os.getenv("LOG_LEVEL", defaults.log_level),
             quote_provider=quote_provider,
             quote_timeout_seconds=quote_timeout_seconds,
         )

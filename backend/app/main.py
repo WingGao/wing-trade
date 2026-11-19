@@ -15,6 +15,7 @@ from app.api.errors import (
     validation_error_handler,
 )
 from app.api.v1.router import router
+from app.config import normalize_log_level, settings
 from app.db.migrations import prepare_database_schema
 from app.db.session import engine, healthcheck
 from app.domain.exceptions import DomainError
@@ -22,7 +23,21 @@ from app.domain.exceptions import DomainError
 logger = logging.getLogger("ashare_ledger.api")
 
 
+def configure_logging(log_level: str) -> None:
+    """按配置等级统一设置应用与 Uvicorn 命名日志记录器。"""
+    level_name = normalize_log_level(log_level)
+    level = getattr(logging, level_name)
+    logging.basicConfig(level=level)
+    logging.getLogger().setLevel(level)
+    for logger_name in ("ashare_ledger", "uvicorn", "uvicorn.error", "uvicorn.access"):
+        logging.getLogger(logger_name).setLevel(level)
+
+
+configure_logging(settings.log_level)
+
+
 def create_app(*, create_tables: bool = True) -> FastAPI:
+    """创建并配置 FastAPI 应用实例。"""
     application = FastAPI(title="A-Share Portfolio Journal", version="0.1.0")
 
     @application.middleware("http")
