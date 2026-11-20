@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端开发规范总索引"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Vue 组件结构、样式与无障碍规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量标准、禁用模式与测试要求"}
+{"file": ".trellis/spec/frontend/active-position-dashboard.md", "reason": "总览页活动仓位展示、QuoteBadge 紧凑模式与涨幅排序契约"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "个股详情图表轮询、持仓汇总、批次/结清明细与止盈/编辑/刷新契约"}
