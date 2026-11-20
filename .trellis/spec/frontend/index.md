@@ -22,6 +22,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Type Safety](./type-safety.md) | Type patterns, validation | Implemented |
 | [持仓详情与止盈交互](./portfolio-detail-guidelines.md) | 图表轮询、批次展示、交易编辑与刷新、继承与精确百分数 | 已实现 |
 | [活动仓位展示与排序](./active-position-dashboard.md) | 持仓成本、当前价值、报价提示、最低价批次与涨幅排序 | 已实现 |
+| [移动端高信息密度视图](./mobile-high-density.md) | 768px 分端视口、零横向溢出、紧凑列表与弹窗适配契约 | 已实现 |
 
 ---
 
