@@ -8,7 +8,7 @@
 docker compose up --build
 ```
 
-打开 <http://localhost:8080>；后端健康检查位于 <http://localhost:8000/ready>。未配置 `.env` 时保持 SQLite 默认行为，数据库文件仍持久化在 `./data/ashare_journal.db`。
+打开 <http://localhost:8080>（可通过环境变量 `APP_PORT` 调整宿主机端口）；健康检查位于 <http://localhost:8080/ready>。容器构建时会先编译前端静态资源并由后端 FastAPI 统一提供服务；未配置 `.env` 时保持 SQLite 默认行为，数据库文件仍持久化在 `./data/ashare_journal.db`。
 
 ## 数据库配置
 
@@ -42,7 +42,7 @@ MYSQL_PASSWORD='change-me@2026'
 如需在容器内手动检查或执行迁移：
 
 ```bash
-docker compose run --rm backend alembic upgrade head
+docker compose run --rm app alembic upgrade head
 ```
 
 该命令是幂等的，后续结构升级也可使用。SQLite 数据不会自动迁移到 MySQL；切换前应停止服务并备份 `data/` 中的数据库文件。不要删除或清空现有 `ledger.db`，也不要让迁移命令指向错误数据库。

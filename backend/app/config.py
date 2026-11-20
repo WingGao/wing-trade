@@ -95,6 +95,7 @@ class Settings:
     smtp_from: str = ""
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
+    frontend_dist_dir: str = ""
 
     def __post_init__(self) -> None:
         """校验直接构造或环境变量来源的日志、行情、认证与邮件配置。"""
@@ -167,6 +168,7 @@ class Settings:
         object.__setattr__(self, "smtp_from", smtp_from)
         object.__setattr__(self, "smtp_use_tls", smtp_use_tls)
         object.__setattr__(self, "smtp_use_ssl", smtp_use_ssl)
+        object.__setattr__(self, "frontend_dist_dir", self.frontend_dist_dir.strip())
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -237,6 +239,7 @@ class Settings:
             smtp_from=os.getenv("SMTP_FROM", ""),
             smtp_use_tls=smtp_use_tls,
             smtp_use_ssl=smtp_use_ssl,
+            frontend_dist_dir=os.getenv("FRONTEND_DIST_DIR", defaults.frontend_dist_dir),
         )
 
     @staticmethod
