@@ -39,4 +39,9 @@ const plot = computed(() => {
 svg { display: block; width: 100%; max-height: 300px; }
 text { fill: #8290a3; font-size: 12px; font-family: inherit; }
 .empty { min-height: 200px; display: grid; place-items: center; color: #8290a3; }
+@media (max-width: 768px) {
+  .intraday-chart { min-height: 160px; }
+  svg { max-height: 200px; }
+  .empty { min-height: 160px; font-size: 12px; }
+}
 </style>

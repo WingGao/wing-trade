@@ -4,11 +4,13 @@ import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Trade, TradeUpdate, TradeUpdateRead } from '../api/types'
 import { useLedgerStore } from '../stores/ledger'
+import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{ trade: Trade | null; securityLabel: string }>()
 const emit = defineEmits<{ saved: [result: TradeUpdateRead] }>()
 const visible = defineModel<boolean>({ default: false })
 const ledger = useLedgerStore()
+const { isMobile } = useViewport()
 const saving = ref(false)
 const error = ref('')
 const form = reactive({ executedAt: '', qty: '', price: '', commission: '', stampDuty: '', transferFee: '', otherFee: '', memo: '', reason: '' })
@@ -69,10 +71,10 @@ onBeforeUnmount(() => { alive = false })
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="编辑交易流水" width="560px" top="5vh" class="edit-trade-dialog" :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving">
+  <el-dialog v-model="visible" title="编辑交易流水" :width="isMobile ? '94vw' : '560px'" top="5vh" class="edit-trade-dialog" :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving">
     <el-alert v-if="error" :title="error" type="error" :closable="false" class="status-alert" />
     <p class="muted">{{ securityLabel }} · {{ trade?.side === 'BUY' ? '买入' : '卖出' }}<br>账户 {{ trade?.accountId }} · 策略 {{ trade?.strategyId }}（归属和买卖方向不可修改）</p>
-    <el-form label-width="110px" :disabled="saving" @submit.prevent="submit">
+    <el-form :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '110px'" :disabled="saving" @submit.prevent="submit">
       <el-form-item label="成交时间"><el-input v-model="form.executedAt" aria-label="成交时间" placeholder="例如 2026-11-18T09:30:00+08:00" /><span class="muted">保留时区；+08:00 为北京时间，Z 为 UTC。</span></el-form-item>
       <el-form-item label="成交数量"><el-input v-model="form.qty" aria-label="成交数量" /></el-form-item>
       <el-form-item label="成交价格"><el-input v-model="form.price" aria-label="成交价格" /></el-form-item>

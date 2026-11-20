@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Currency, Lot, SellPreview } from '../api/types'
 import { formatDateTime, formatMoney, formatQuantity, trendClass } from '../utils/format'
+import { useViewport } from '../utils/viewport'
 
 interface PreviewInput {
   accountId?: string
@@ -17,6 +18,7 @@ interface PreviewInput {
 const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string; currency?: Currency }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
+const { isMobile } = useViewport()
 const form = reactive({ qty: '', price: '', executedAt: new Date().toISOString().slice(0, 16) })
 const preview = ref<SellPreview | null>(null)
 const previewInput = ref<PreviewInput | null>(null)
@@ -122,8 +124,8 @@ async function submit() {
 }
 </script>
 <template>
-  <el-drawer v-model="visible" :title="`卖出配对工作台（${previewCurrency ?? currency ?? '币种未知'}）`" size="min(760px, 96vw)">
-    <el-form class="sell-form" label-width="86px">
+  <el-drawer v-model="visible" :title="`卖出配对工作台（${previewCurrency ?? currency ?? '币种未知'}）`" :size="isMobile ? '100%' : 'min(760px, 96vw)'">
+    <el-form class="sell-form" :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '86px'">
       <el-form-item label="卖出数量"><el-input v-model="form.qty" inputmode="numeric" /></el-form-item>
       <el-form-item label="卖出价格"><el-input v-model="form.price" inputmode="decimal" /></el-form-item>
       <el-form-item label="成交时间"><el-date-picker v-model="form.executedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
@@ -132,12 +134,12 @@ async function submit() {
     <p class="muted">优先最近买入批次，跨批次尽量等量扣减；容量不足或整数余股由服务端分配，差价计入个股已实现收益。</p>
     <el-divider />
     <div v-if="preview" class="preview">
-      <div class="preview-summary">
-        <div><span class="preview-label">预计净回款</span><strong>{{ formatMoney(preview.cashIn, previewCurrency) }}</strong></div>
-        <div><span class="preview-label">已实现收益</span><strong :class="trendClass(preview.realizedPnl)">{{ formatMoney(preview.realizedPnl, previewCurrency) }}</strong></div>
-        <div><span class="preview-label">预览成交量</span><strong>{{ formatQuantity(preview.qty) }}</strong></div>
+      <div :class="['preview-summary', { 'm-preview-summary': isMobile }]">
+        <div><span class="preview-label">预计净回款</span><strong class="num">{{ formatMoney(preview.cashIn, previewCurrency) }}</strong></div>
+        <div><span class="preview-label">已实现收益</span><strong :class="['num', trendClass(preview.realizedPnl)]">{{ formatMoney(preview.realizedPnl, previewCurrency) }}</strong></div>
+        <div><span class="preview-label">预览成交量</span><strong class="num">{{ formatQuantity(preview.qty) }}</strong></div>
       </div>
-      <el-table :data="preview.matches" row-key="lotId" size="small" class="match-table">
+      <el-table v-if="!isMobile" :data="preview.matches" row-key="lotId" size="small" class="match-table">
         <el-table-column label="买入时间" min-width="170">
           <template #default="{ row }"><strong class="match-primary">{{ formatDateTime(row.buyExecutedAt) }}</strong></template>
         </el-table-column>
@@ -155,6 +157,29 @@ async function submit() {
           <template #default="{ row }">{{ formatMoney(row.allocatedBuyCost, previewCurrency) }}</template>
         </el-table-column>
       </el-table>
+      <div v-else class="m-match-list">
+        <article v-for="row in preview.matches" :key="row.lotId" class="m-match-item">
+          <div class="m-match-top">
+            <span class="lot-code" :title="row.lotId">{{ shortLotId(row.lotId) }}</span>
+            <span class="match-secondary num">{{ formatDateTime(row.buyExecutedAt) }}</span>
+          </div>
+          <div class="m-match-grid">
+            <div class="m-match-cell">
+              <span class="preview-label">原始价</span>
+              <strong class="match-primary num">{{ formatMoney(row.buyPrice, previewCurrency) }}</strong>
+            </div>
+            <div class="m-match-cell">
+              <span class="preview-label">本次配对</span>
+              <strong class="match-primary num">{{ formatQuantity(row.matchedQty) }} 股</strong>
+              <span class="match-secondary num">买 {{ formatQuantity(row.buyQty) }} / 用 {{ formatQuantity(row.availableQty) }}</span>
+            </div>
+            <div class="m-match-cell m-match-right">
+              <span class="preview-label">分摊成本</span>
+              <strong class="match-primary num">{{ formatMoney(row.allocatedBuyCost, previewCurrency) }}</strong>
+            </div>
+          </div>
+        </article>
+      </div>
     </div>
     <div v-else class="preview-placeholder muted">尚无有效预览</div>
     <template #footer>
@@ -177,4 +202,13 @@ async function submit() {
   .preview-summary { gap: 12px 20px; }
   .preview-summary > div { min-width: 120px; }
 }
+.m-preview-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 10px 0; }
+.m-preview-summary > div { min-width: 0; font-size: 13px; }
+.m-match-list { margin-top: 10px; border: 1px solid #edf0f5; border-radius: 6px; overflow: hidden; }
+.m-match-item { padding: 8px 10px; border-bottom: 1px solid #edf0f5; }
+.m-match-item:last-child { border-bottom: 0; }
+.m-match-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 5px; font-size: 11px; }
+.m-match-grid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr) minmax(0, 0.9fr); gap: 6px; }
+.m-match-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
+.m-match-right { text-align: right; }
 </style>

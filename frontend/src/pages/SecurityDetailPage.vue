@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
-import type { Account, Currency, IntradayRead, Lot, LotsRead, LotsSummary, PositionRefreshScope, Quote, Security, SettledTradeDetail } from '../api/types'
+import type { Account, Currency, DashboardPosition, IntradayRead, Lot, LotsRead, LotsSummary, PositionRefreshScope, Quote, Security, SettledTradeDetail } from '../api/types'
 import LotTable from '../components/LotTable.vue'
 import SettledTradeTable from '../components/SettledTradeTable.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
@@ -14,12 +14,15 @@ import IntradayChart from '../components/IntradayChart.vue'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLedgerStore } from '../stores/ledger'
-import { formatDateTime, formatMoney, formatQuantity, trendClass } from '../utils/format'
+import { formatDateTime, formatMoney, formatQuantity, formatSignedPercent, trendClass } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
+import { useViewport } from '../utils/viewport'
 
 const route = useRoute()
+const router = useRouter()
 const preferences = usePreferencesStore()
 const ledger = useLedgerStore()
+const { isMobile } = useViewport()
 const security = ref<Security | null>(null)
 const accounts = ref<Account[]>([])
 const accountId = ref('')
@@ -41,6 +44,8 @@ const sellVisible = ref(false)
 const targetVisible = ref(false)
 const globalTargetVisible = ref(false)
 const securityTargetVisible = ref(false)
+const mobileActionsOpen = ref(false)
+const mobileChartOpen = ref(false)
 const selectedLotId = ref('')
 const selectedLot = computed(() => lots.value.find((lot) => lot.id === selectedLotId.value))
 const currency = computed<Currency>(() => security.value?.currency ?? (security.value?.market === 'US' ? 'USD' : 'CNY'))
@@ -57,6 +62,61 @@ const holdingSummaryStale = computed(() => holdingSummary.value?.unrealizedPnl !
 const hasOpenLots = computed(() => lots.value.some((lot) => lot.status === 'OPEN'))
 /** 判断服务端汇总是否包含仍有剩余数量的未结清批次。 */
 const hasRemainingHolding = computed(() => Boolean(holdingSummary.value && /[1-9]/.test(holdingSummary.value.remainingQty)))
+/** 按当前涨幅降序排列活动仓位，无有效行情的持仓排在末尾，供详情页快速切换。 */
+const activePositions = computed<DashboardPosition[]>(() => {
+  return [...ledger.positions]
+    .filter((position) => Boolean(position.market && position.symbol))
+    .sort((left, right) => {
+      const leftVal = Number(left.quote?.changePct)
+      const rightVal = Number(right.quote?.changePct)
+      const leftValid = Number.isFinite(leftVal)
+      const rightValid = Number.isFinite(rightVal)
+      if (!leftValid && !rightValid) return 0
+      if (!leftValid) return 1
+      if (!rightValid) return -1
+      return rightVal - leftVal
+    })
+})
+
+/** 判断活动仓位条目是否为当前详情页正在查看的证券。 */
+function isCurrentPosition(position: DashboardPosition): boolean {
+  return (
+    position.market?.toUpperCase() === String(route.params.market).toUpperCase()
+    && position.symbol?.toUpperCase() === String(route.params.symbol).toUpperCase()
+  )
+}
+
+/** 从详情页活动仓位列表切换到目标个股，并保留快照账户与策略范围。 */
+function switchPosition(position: DashboardPosition): void {
+  if (!position.market || !position.symbol || isCurrentPosition(position)) return
+  void router.push({
+    path: `/security/${position.market}/${position.symbol}`,
+    query: {
+      accountId: ledger.dashboard?.accountId ?? (accountId.value || undefined),
+      strategyId: position.strategyId,
+    },
+  })
+}
+
+/** 仅在尚未缓存首页快照时静默拉取缓存活动仓位，不阻塞详情页主加载。 */
+function ensureActivePositions(): void {
+  if (ledger.dashboard) return
+  void ledger.loadDashboard({
+    accountId: accountId.value || undefined,
+    includeClosed: false,
+    mode: 'cache',
+  })
+}
+
+/** 切换移动端详情页快捷操作栏的展开或收起状态。 */
+function toggleMobileActions(): void {
+  mobileActionsOpen.value = !mobileActionsOpen.value
+}
+
+/** 切换移动端详情页日内分时图区域的展开或收起状态。 */
+function toggleMobileChart(): void {
+  mobileChartOpen.value = !mobileChartOpen.value
+}
 let alive = false
 let generation = 0
 let lotGeneration = 0
@@ -240,11 +300,38 @@ watch(() => [accountId.value, preferences.includeClosed] as const, ([account], p
     if (!mutationActive.value) void reloadLots()
   }
 })
-onMounted(() => { alive = true; document.addEventListener('visibilitychange', handleVisibility); void loadPage() })
+onMounted(() => { alive = true; document.addEventListener('visibilitychange', handleVisibility); ensureActivePositions(); void loadPage() })
 onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clearTimer(); document.removeEventListener('visibilitychange', handleVisibility) })
 </script>
 
 <template>
+  <template v-if="!isMobile">
+  <div :class="['detail-layout', { 'detail-layout--with-aside': activePositions.length > 0 }]">
+    <aside v-if="activePositions.length" class="detail-pos-aside" aria-label="活动仓位快速切换">
+      <div class="detail-pos-aside-head">
+        <span>活动仓位</span>
+        <span class="muted">{{ activePositions.length }}</span>
+      </div>
+      <div class="detail-pos-list">
+        <button
+          v-for="pos in activePositions"
+          :key="`${pos.securityId}|${pos.strategyId}`"
+          type="button"
+          :class="['detail-pos-item', { 'is-active': isCurrentPosition(pos) }]"
+          @click="switchPosition(pos)"
+        >
+          <div class="detail-pos-left">
+            <strong class="detail-pos-name">{{ pos.name || pos.symbol }}</strong>
+            <span class="detail-pos-code">{{ pos.market }}:{{ pos.symbol }}</span>
+          </div>
+          <div class="detail-pos-right num">
+            <span class="detail-pos-price">{{ pos.quote?.lastPrice ? formatMoney(pos.quote.lastPrice, pos.currency ?? currency, 3) : '—' }}</span>
+            <span :class="['detail-pos-chg', trendClass(pos.quote?.changePct)]">{{ formatSignedPercent(pos.quote?.changePct) }}</span>
+          </div>
+        </button>
+      </div>
+    </aside>
+    <div class="detail-main">
   <section class="page-head detail-head">
     <div><h2>{{ route.params.market }}:{{ route.params.symbol }} {{ security?.name ?? '' }}</h2><p class="muted">批次、配对和止盈设置</p></div>
     <div class="toolbar"><el-select v-if="matchingAccounts.length" v-model="accountId" aria-label="当前账户" style="width:170px"><el-option v-for="account in matchingAccounts" :key="account.id" :value="account.id" :label="account.name" /></el-select><el-button @click="globalTargetVisible = true">全局止盈设置</el-button><el-button :disabled="!security" @click="securityTargetVisible = true">个股止盈设置</el-button><el-button :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button><el-button type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button></div>
@@ -291,6 +378,113 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
       <SettledTradeTable :details="closedTradeDetails" :currency="currency" />
     </section>
   </el-card>
+    </div>
+  </div>
+  </template>
+
+  <template v-else>
+    <nav v-if="activePositions.length" class="m-pos-strip-wrap" aria-label="活动仓位快速切换">
+      <div :class="['m-pos-strip', { 'm-pos-strip--two-rows': activePositions.length > 2 }]">
+        <button
+          v-for="pos in activePositions"
+          :key="`${pos.securityId}|${pos.strategyId}`"
+          type="button"
+          :class="['m-pos-chip', { 'is-active': isCurrentPosition(pos) }]"
+          @click="switchPosition(pos)"
+        >
+          <div class="m-pos-chip-top">
+            <strong class="m-pos-chip-name">{{ pos.name || pos.symbol }}</strong>
+            <span :class="['m-pos-chip-chg', 'num', trendClass(pos.quote?.changePct)]">{{ formatSignedPercent(pos.quote?.changePct) }}</span>
+          </div>
+          <div class="m-pos-chip-sub num">
+            <span>{{ pos.symbol }}</span>
+            <span>{{ pos.quote?.lastPrice ? formatMoney(pos.quote.lastPrice, pos.currency ?? currency, 3) : '—' }}</span>
+          </div>
+        </button>
+      </div>
+    </nav>
+
+    <section class="m-section m-detail-head">
+      <div class="m-detail-top">
+        <div class="m-detail-title-box">
+          <h2 class="m-detail-title">{{ route.params.market }}:{{ route.params.symbol }}</h2>
+          <span v-if="security?.name" class="m-detail-name">{{ security.name }}</span>
+        </div>
+        <div class="m-detail-top-right">
+          <QuoteBadge :quote="currentQuote" :currency="currency" compact />
+          <button type="button" class="m-collapse-btn" :aria-expanded="mobileActionsOpen" @click="toggleMobileActions">
+            {{ mobileActionsOpen ? '收起操作 ▴' : '操作 ▾' }}
+          </button>
+        </div>
+      </div>
+      <div v-if="mobileActionsOpen" class="m-detail-actions">
+        <el-select v-if="matchingAccounts.length" v-model="accountId" aria-label="当前账户" size="small" class="m-detail-account">
+          <el-option v-for="account in matchingAccounts" :key="account.id" :value="account.id" :label="account.name" />
+        </el-select>
+        <el-button size="small" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
+        <el-button size="small" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button>
+        <el-button size="small" :disabled="!security" @click="securityTargetVisible = true">个股止盈</el-button>
+        <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
+      </div>
+    </section>
+
+    <el-alert v-if="pageError" :title="pageError" type="error" :closable="false" class="status-alert" />
+    <el-alert v-if="security && !accountId" :title="`暂无 ${currency} 账户，请先在总览中创建同币种账户后记账。`" type="warning" :closable="false" class="status-alert" />
+
+    <section class="m-section m-chart-box">
+      <button type="button" class="m-section-head m-collapse-head" :aria-expanded="mobileChartOpen" @click="toggleMobileChart">
+        <span>日内分时 <span class="m-section-sub">{{ intraday?.tradingDate ?? '' }}</span></span>
+        <span class="m-section-sub">{{ intraday?.provider ?? '—' }}<span v-if="intraday?.isStale || marketError"> · 已过期</span> · {{ mobileChartOpen ? '收起 ▴' : '展开 ▾' }}</span>
+      </button>
+      <template v-if="mobileChartOpen">
+        <div v-if="marketError" class="m-compact-note is-warning">行情刷新失败：{{ marketError }}；保留最后有效数据作为过期参考。</div>
+        <div class="m-chart-body"><IntradayChart :data="intraday" /></div>
+      </template>
+    </section>
+
+    <section class="m-section">
+      <div class="m-section-head">
+        <span>持仓批次 <span class="m-section-sub">已结清 {{ closedLotCount }} 批</span></span>
+        <div class="m-lot-tools">
+          <el-switch v-model="preferences.includeClosed" size="small" active-text="已结清" />
+          <el-button size="small" :disabled="!security || !accountId" :loading="rebuilding" @click="recalculate">重算</el-button>
+        </div>
+      </div>
+      <div v-if="needsRefresh" class="m-refresh-banner">
+        <span>交易流水已更正，当前持仓与收益尚未重新核算。</span>
+        <el-button size="small" type="warning" :loading="rebuilding" @click="recalculate">刷新持仓</el-button>
+      </div>
+      <dl class="holding-summary m-holding-summary" aria-label="持仓汇总">
+        <div class="summary-item">
+          <dt>总持股数</dt>
+          <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty) }}</dd>
+        </div>
+        <div class="summary-item">
+          <dt>持仓成本</dt>
+          <dd class="summary-value">{{ formatMoney(holdingSummary?.remainingCost, currency) }}</dd>
+        </div>
+        <div class="summary-item">
+          <dt>已实现收益</dt>
+          <dd class="summary-value" :class="trendClass(holdingSummary?.realizedPnl)">{{ formatMoney(holdingSummary?.realizedPnl, currency) }}</dd>
+        </div>
+        <div class="summary-item">
+          <dt>总浮盈</dt>
+          <dd class="summary-value" :class="trendClass(holdingSummary?.unrealizedPnl)">{{ formatMoney(holdingSummary?.unrealizedPnl, currency) }}</dd>
+          <p v-if="holdingSummary && !hasRemainingHolding" class="summary-note">暂无持仓</p>
+          <p v-else-if="holdingSummary?.unrealizedPnl === null" class="summary-note">暂无有效行情</p>
+          <p v-else-if="holdingSummaryStale" class="summary-note">参考浮盈 · 行情已过期</p>
+        </div>
+      </dl>
+      <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" @set-target="addTarget" /></div>
+    </section>
+
+    <section v-if="preferences.includeClosed" class="m-section">
+      <div class="m-section-head"><span>已结清买卖明细</span></div>
+      <div class="m-compact-note is-info">跨批次卖出仅展示本批数量、分摊净回款和已实现盈亏。</div>
+      <SettledTradeTable :details="closedTradeDetails" :currency="currency" />
+    </section>
+  </template>
+
   <BuyTradeDialog v-if="security" v-model="buyVisible" :security-id="security.id" :account-id="accountId" :currency="currency" @saved="reloadLots" />
   <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :lots="lots" @saved="reloadLots" />
   <ProfitTargetDialog v-if="selectedLot" v-model="targetVisible" :lot-id="selectedLot.id" :lot="selectedLot" @saved="reloadLots" />
@@ -310,10 +504,51 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
 .summary-note { margin: 4px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.4; }
 .settled-trade-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--el-border-color-lighter); }
 .settled-trade-section h3 { margin: 0 0 8px; font-size: 16px; }
-@media (max-width: 720px) {
-  .holding-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .summary-item { padding: 12px; }
-  .summary-item:nth-child(odd) { border-left: 0; padding-left: 0; }
+@media (max-width: 768px) {
+  .holding-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 0; border-top: 0; }
+  .summary-item { padding: 8px 10px; }
+  .summary-item:nth-child(odd) { border-left: 0; }
   .summary-item:nth-child(n + 3) { border-top: 1px solid var(--el-border-color-lighter); }
+  .summary-value { font-size: 15px; }
+  .summary-note { font-size: 11px; }
 }
+.m-detail-head { padding: 8px 10px; }
+.m-detail-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.m-detail-top-right { display: flex; align-items: flex-start; gap: 8px; flex-shrink: 0; }
+.m-collapse-btn { height: 24px; padding: 0 7px; border: 1px solid #dbe2ec; border-radius: 5px; background: #f8fafc; color: #334155; font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.m-collapse-head { width: 100%; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.m-detail-title-box { min-width: 0; }
+.m-detail-title { margin: 0; font-size: 16px; line-height: 1.25; }
+.m-detail-name { display: block; font-size: 12px; color: #64748b; margin-top: 2px; }
+.m-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #edf0f5; }
+.m-detail-account { width: 124px; }
+.m-chart-body { padding: 4px 6px 6px; }
+.m-lot-tools { display: flex; align-items: center; gap: 6px; }
+.m-refresh-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: #fdf6ec; border-bottom: 1px solid #f5e6c8; font-size: 11px; color: #a66a14; }
+.detail-layout { display: block; }
+.detail-layout--with-aside { display: flex; align-items: flex-start; gap: 18px; }
+.detail-pos-aside { flex: 0 0 220px; width: 220px; position: sticky; top: 16px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; background: #fff; border-radius: 8px; box-shadow: 0 4px 18px #1822300b; overflow: hidden; }
+.detail-pos-aside-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #edf0f5; font-size: 13px; font-weight: 700; color: #182230; }
+.detail-pos-list { overflow-y: auto; display: flex; flex-direction: column; }
+.detail-pos-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 10px 12px; border: 0; border-left: 3px solid transparent; border-bottom: 1px solid #f1f4f9; background: #fff; text-align: left; cursor: pointer; transition: background-color 0.15s ease; }
+.detail-pos-item:last-child { border-bottom: 0; }
+.detail-pos-item:hover { background: #f8fafd; }
+.detail-pos-item.is-active { background: #eff6ff; border-left-color: #2563eb; }
+.detail-pos-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.detail-pos-name { font-size: 13px; color: #182230; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.detail-pos-code { font-size: 11px; color: #7d899b; }
+.detail-pos-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+.detail-pos-price { font-size: 12px; font-weight: 600; color: #334155; }
+.detail-pos-chg { font-size: 11px; font-weight: 600; }
+.detail-main { flex: 1; min-width: 0; }
+.m-pos-strip-wrap { position: sticky; top: 44px; z-index: 15; margin: -8px -8px 8px; padding: 6px 8px; background: #f2f4f8; border-bottom: 1px solid #e5e9f0; }
+.m-pos-strip { display: flex; gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.m-pos-strip--two-rows { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, auto); grid-auto-columns: minmax(112px, 138px); gap: 5px 6px; }
+.m-pos-strip::-webkit-scrollbar { display: none; }
+.m-pos-chip { flex: 0 0 auto; min-width: 112px; max-width: 148px; padding: 4px 7px; border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.m-pos-chip.is-active { border-color: #2563eb; background: #eff6ff; }
+.m-pos-chip-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.m-pos-chip-name { font-size: 12px; color: #182230; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-pos-chip-chg { font-size: 11px; font-weight: 600; flex-shrink: 0; white-space: nowrap; }
+.m-pos-chip-sub { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; color: #7d899b; white-space: nowrap; }
 </style>

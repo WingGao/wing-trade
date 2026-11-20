@@ -12,10 +12,12 @@ import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
 import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, trendClass, valuationStatusLabel } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
+import { useViewport } from '../utils/viewport'
 
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
 const router = useRouter()
+const { isMobile } = useViewport()
 const positions = computed(() => ledger.positions)
 const positionSortOrder = ref<'ascending' | 'descending'>('descending')
 const dashboard = computed(() => ledger.dashboard)
@@ -78,6 +80,11 @@ const sortedPositions = computed(() => {
 function handlePositionSort({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
   if (prop !== 'quote.changePct') return
   positionSortOrder.value = order === 'ascending' ? 'ascending' : 'descending'
+}
+
+/** 移动端点击排序头在当前涨幅降序与升序之间切换。 */
+function togglePositionSortOrder(): void {
+  positionSortOrder.value = positionSortOrder.value === 'descending' ? 'ascending' : 'descending'
 }
 
 /** 按当前持仓数量和最新报价计算展示用总价值，缺少有效行情时返回空值。 */
@@ -393,6 +400,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <template v-if="!isMobile">
   <section class="page-head">
     <div><h2>账户总览</h2><p class="muted">以真实交易流水为准，价格、浮盈和汇总来自同一次估值响应。</p></div>
     <div class="toolbar">
@@ -488,6 +496,152 @@ onBeforeUnmount(() => {
       <div v-if="!dashboard?.quotes.length" class="empty">暂无自选股行情</div>
     </div>
   </el-card>
+  </template>
+
+  <template v-else>
+    <section class="m-section m-dash-head">
+      <div class="m-dash-toolbar">
+        <el-tag :type="statusTagType(valuationStatus)" size="small">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
+        <div class="m-dash-actions">
+          <el-switch v-model="preferences.includeClosed" size="small" active-text="已结清" />
+          <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
+          <el-button size="small" type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新</el-button>
+        </div>
+      </div>
+      <div v-if="ledger.error" class="m-compact-note is-error">估值刷新失败：{{ ledger.error }}。账务记录仍可正常使用。</div>
+      <div v-if="dashboard" :class="['m-compact-note', `is-${statusAlertType(valuationStatus)}`]">{{ valuationMessage }}</div>
+    </section>
+
+    <section class="m-section m-summary-grid" aria-label="账户汇总">
+      <div class="m-summary-top">
+        <div class="m-summary-cell">
+          <span class="m-summary-label">持仓总价值</span>
+          <strong class="m-summary-main num">{{ marketValue }}</strong>
+          <span class="m-summary-sub">{{ valuationStatus === 'stale' ? '参考估值 · 行情已过期' : '按当前持仓与同次行情' }}</span>
+        </div>
+        <div class="m-summary-cell">
+          <span class="m-summary-label">账户未实现浮盈</span>
+          <strong :class="['m-summary-main', 'num', trendClass(ledger.summary?.unrealizedPnl)]">{{ unrealizedValue }}</strong>
+          <span class="m-summary-sub num">{{ unrealizedRate }}</span>
+        </div>
+      </div>
+      <div class="m-summary-bottom">
+        <div class="m-summary-mini">
+          <span class="m-summary-label">累计买入</span>
+          <strong class="m-summary-mini-val num">{{ formatMoney(ledger.summary?.totalBuyCashOut, dashboardCurrency) }}</strong>
+        </div>
+        <div class="m-summary-mini">
+          <span class="m-summary-label">累计卖出</span>
+          <strong class="m-summary-mini-val num">{{ formatMoney(ledger.summary?.totalSellCashIn, dashboardCurrency) }}</strong>
+        </div>
+        <div class="m-summary-mini">
+          <span class="m-summary-label">已实现收益</span>
+          <strong :class="['m-summary-mini-val', 'num', trendClass(ledger.summary?.realizedPnl)]">{{ formatMoney(ledger.summary?.realizedPnl, dashboardCurrency) }}</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="m-section m-quick-trade">
+      <div class="m-quick-row">
+        <el-input v-model="securityKeyword" size="small" placeholder="输入证券代码/名称，如 600519" clearable @keyup.enter="searchSecurities" />
+        <el-button size="small" type="primary" :loading="searching" @click="searchSecurities">查找</el-button>
+      </div>
+      <div v-if="securityResults.length" class="m-security-results">
+        <button v-for="security in securityResults" :key="`${security.market}:${security.symbol}`" class="m-security-option" type="button" @click="chooseSecurity(security)">
+          <strong>{{ security.market }}:{{ security.symbol }}</strong>
+          <span>{{ security.name ?? '名称不可用' }}</span>
+        </button>
+      </div>
+      <div v-if="searchError" class="m-compact-note is-warning">{{ searchError }}</div>
+      <div v-if="searched && !searching && securityKeyword && !securityResults.length && !selectedSecurity" class="m-security-create">
+        <span class="m-section-sub">无匹配项，可新增：</span>
+        <div class="m-security-create-row">
+          <el-select v-model="marketChoice" size="small" style="width:76px"><el-option label="A股" value="CN" /><el-option label="美股" value="US" /></el-select>
+          <el-input v-model="securityName" size="small" placeholder="证券名称" />
+          <el-button size="small" type="success" @click="createSecurity">新增</el-button>
+        </div>
+      </div>
+      <div v-if="selectedSecurity" class="m-selected-box">
+        <div class="m-selected-info">
+          <strong>{{ selectedSecurity.market }}:{{ selectedSecurity.symbol }}</strong>
+          <span>{{ selectedSecurity.name ?? '' }}</span>
+          <span v-if="!accountMatchesSecurity" class="m-currency-warn">需 {{ requiredCurrency }} 账户</span>
+          <span v-else-if="!selectedLots.length" class="m-section-sub">无未结清批次</span>
+        </div>
+        <div class="m-selected-actions">
+          <el-select v-if="accounts.length" v-model="selectedAccountId" size="small" class="m-account-select" placeholder="选择账户">
+            <el-option v-for="account in accounts" :key="account.id" :label="`${account.name} (${account.currency})`" :value="account.id" />
+          </el-select>
+          <el-button size="small" :disabled="!accountMatchesSecurity" @click="buyVisible = true">买入记账</el-button>
+          <el-button size="small" type="danger" :disabled="!accountMatchesSecurity || !selectedLots.length" @click="sellVisible = true">卖出配对</el-button>
+          <el-button v-if="!accounts.some((item) => item.currency === requiredCurrency)" size="small" @click="createAccountForCurrency(requiredCurrency)">创建 {{ requiredCurrency }} 账户</el-button>
+        </div>
+      </div>
+    </section>
+
+    <section class="m-section m-positions" v-loading="ledger.loading">
+      <div class="m-section-head">
+        <span>活动仓位</span>
+        <span class="m-section-sub">{{ dashboard?.summary.totalOpenPositions ?? 0 }} 个未结清持仓</span>
+      </div>
+      <div v-if="pendingScopes.length" class="m-compact-note is-warning">需要刷新：部分交易流水已更正，相关持仓、收益及账户汇总尚未重新核算。</div>
+      <div v-for="scope in unlistedScopes" :key="`${scope.accountId}|${scope.securityId}|${scope.strategyId}`" class="m-pending-scope">
+        <span class="m-pending-text"><strong>{{ scope.market }}:{{ scope.symbol }}</strong> {{ scope.name ?? '' }} · 无活动仓位 · 待刷新</span>
+        <el-button size="small" type="warning" :loading="isPositionRefreshing(scope)" @click="recalculate(scope)">刷新持仓</el-button>
+      </div>
+      <div class="m-pos-header">
+        <span>证券 / 持仓</span>
+        <button type="button" class="m-sort-btn" @click="togglePositionSortOrder">
+          当前总价值 <span aria-hidden="true">{{ positionSortOrder === 'descending' ? '↓' : '↑' }}</span>
+        </button>
+        <span class="m-align-right">持仓浮盈</span>
+      </div>
+      <div v-if="sortedPositions.length" class="m-position-list">
+        <article v-for="row in sortedPositions" :key="`${row.securityId}|${row.strategyId}`" class="m-pos-item">
+          <div class="m-pos-main">
+            <div class="m-pos-col-sec">
+              <a class="m-pos-link" href="#" @click.prevent="openPosition(row)">
+                <strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong>
+                <span v-if="row.name" class="m-pos-name">{{ row.name }}</span>
+              </a>
+              <div class="m-pos-holding num">{{ formatQuantity(row.remainingQty) }}股 · 均 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency) }}</div>
+            </div>
+            <div class="m-pos-col-quote">
+              <QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact />
+            </div>
+            <div class="m-pos-col-pnl">
+              <div :class="['m-pos-pnl', 'num', trendClass(row.unrealizedPnl)]">{{ formatMoney(row.unrealizedPnl, row.currency ?? dashboardCurrency) }}</div>
+              <div :class="['m-pos-rate', 'num', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</div>
+            </div>
+          </div>
+          <div class="m-pos-foot">
+            <div class="m-pos-lowest num">
+              <template v-if="row.lowestPriceGroup">
+                最低批 {{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency) }} · {{ row.lowestPriceGroup.lotCount }}批 {{ formatQuantity(row.lowestPriceGroup.remainingQty) }}股 {{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}
+              </template>
+              <span v-else class="m-section-sub">无最低批</span>
+            </div>
+            <div v-if="row.lowestPriceGroup || row.needsRefresh" class="m-pos-foot-right">
+              <span v-if="row.lowestPriceGroup" :class="['m-pos-group-pnl', 'num', trendClass(row.lowestPriceGroup.unrealizedPnl)]">{{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</span>
+              <el-button v-if="row.needsRefresh" size="small" type="warning" plain :loading="isPositionRefreshing(rowScope(row))" @click="recalculate(rowScope(row))">刷新持仓</el-button>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div v-else class="m-empty">暂无持仓</div>
+    </section>
+
+    <section class="m-section">
+      <div class="m-section-head"><span>自选股行情</span></div>
+      <div v-if="dashboard?.quotes.length" class="m-quote-grid">
+        <div v-for="quote in dashboard.quotes" :key="quote.symbol" class="m-quote-card">
+          <div class="m-quote-symbol">{{ quote.symbol }}</div>
+          <QuoteBadge :quote="quote" :currency="quote.currency ?? dashboardCurrency" compact />
+        </div>
+      </div>
+      <div v-else class="m-empty">暂无自选股行情</div>
+    </section>
+  </template>
 
   <BuyTradeDialog v-if="selectedSecurity" v-model="buyVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" @saved="reloadQuickTrade" />
   <SellMatchDrawer v-if="selectedSecurity" v-model="sellVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :lots="selectedLots" @saved="reloadQuickTrade" />
@@ -501,4 +655,55 @@ onBeforeUnmount(() => {
 .position-quantity { color: #263244; }
 .position-cost { color: #7d899b; font-size: 12px; }
 .lowest-group-meta { display: flex; gap: 12px; margin: 2px 0; color: #7d899b; font-size: 12px; white-space: nowrap; }
+.m-dash-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 10px; border-bottom: 1px solid #edf0f5; flex-wrap: wrap; }
+.m-dash-actions { display: flex; align-items: center; gap: 6px; }
+.m-summary-top { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #edf0f5; }
+.m-summary-cell { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.m-summary-cell:first-child { border-right: 1px solid #edf0f5; }
+.m-summary-label { font-size: 11px; color: #7d899b; }
+.m-summary-main { font-size: 16px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
+.m-summary-sub { font-size: 10px; color: #8290a3; }
+.m-summary-bottom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.m-summary-mini { padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; min-width: 0; border-right: 1px solid #edf0f5; }
+.m-summary-mini:last-child { border-right: 0; }
+.m-summary-mini-val { font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+.m-quick-trade { padding: 8px 10px; }
+.m-quick-row { display: flex; gap: 6px; align-items: center; }
+.m-quick-row .el-input { flex: 1; min-width: 0; }
+.m-security-results { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.m-security-option { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; border: 1px solid #e9edf3; border-radius: 6px; background: #fafbfd; padding: 6px 8px; font-size: 12px; text-align: left; cursor: pointer; }
+.m-security-option span { color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-security-create { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.m-security-create-row { display: flex; gap: 6px; align-items: center; }
+.m-security-create-row .el-input { flex: 1; min-width: 0; }
+.m-selected-box { margin-top: 8px; padding-top: 8px; border-top: 1px solid #edf0f5; display: flex; flex-direction: column; gap: 6px; }
+.m-selected-info { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: #334155; }
+.m-currency-warn { color: #d99014; font-size: 11px; }
+.m-selected-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.m-account-select { flex: 1; min-width: 130px; }
+.m-pending-scope { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: #fffbf2; border-bottom: 1px solid #f5e6c8; font-size: 11px; }
+.m-pending-text { min-width: 0; overflow-wrap: anywhere; }
+.m-pos-header { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: 6px; align-items: center; padding: 6px 10px; background: #f8fafc; border-bottom: 1px solid #edf0f5; font-size: 11px; font-weight: 600; color: #64748b; }
+.m-sort-btn { justify-self: end; border: 0; background: transparent; padding: 0; font-size: 11px; font-weight: 700; color: #2563eb; cursor: pointer; display: inline-flex; align-items: center; gap: 2px; }
+.m-align-right { text-align: right; }
+.m-position-list { display: flex; flex-direction: column; }
+.m-pos-item { border-bottom: 1px solid #e9edf3; }
+.m-pos-item:last-child { border-bottom: 0; }
+.m-pos-main { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: 6px; align-items: start; padding: 8px 10px 6px; }
+.m-pos-col-sec { min-width: 0; }
+.m-pos-link { display: flex; flex-direction: column; text-decoration: none; color: #1d4ed8; font-size: 13px; line-height: 1.25; }
+.m-pos-name { font-size: 11px; font-weight: 400; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-pos-holding { margin-top: 3px; font-size: 11px; color: #475569; line-height: 1.3; }
+.m-pos-col-quote { min-width: 0; display: flex; justify-content: flex-end; text-align: right; }
+.m-pos-col-quote :deep(.quote-value-row--compact) { justify-content: flex-end; }
+.m-pos-col-pnl { min-width: 0; text-align: right; }
+.m-pos-pnl { font-size: 13px; font-weight: 700; line-height: 1.25; }
+.m-pos-rate { font-size: 11px; margin-top: 2px; }
+.m-pos-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding: 5px 10px 7px; background: #fafbfd; border-top: 1px dashed #edf0f5; font-size: 11px; color: #5b687c; line-height: 1.35; }
+.m-pos-lowest { min-width: 0; flex: 1; }
+.m-pos-foot-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: auto; }
+.m-pos-group-pnl { font-weight: 600; white-space: nowrap; }
+.m-quote-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; }
+.m-quote-card { padding: 8px; border: 1px solid #edf0f4; border-radius: 6px; background: #fff; min-width: 0; }
+.m-quote-symbol { font-size: 12px; font-weight: 700; margin-bottom: 4px; color: #182230; }
 </style>

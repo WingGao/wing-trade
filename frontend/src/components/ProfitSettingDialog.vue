@@ -3,10 +3,12 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import { formatTargetPercent, percentInputToRate, rateToPercentInput } from '../utils/format'
+import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{ securityId?: string }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
+const { isMobile } = useViewport()
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -50,10 +52,10 @@ watch(() => [visible.value, props.securityId] as const, ([open]) => { if (open) 
 </script>
 
 <template>
-  <el-dialog v-model="visible" :title="title" width="460px">
+  <el-dialog v-model="visible" :title="title" :width="isMobile ? '94vw' : '460px'">
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <p class="muted">{{ securityId ? `留空继承全局设置；${inheritedLabel}。` : '没有个股或批次覆盖时使用此设置。留空可清除全局默认值。' }}</p>
-    <el-form v-loading="loading" :disabled="loading || saving || !!error" label-width="105px">
+    <el-form v-loading="loading" :disabled="loading || saving || !!error" :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '105px'">
       <el-form-item label="目标收益率"><el-input v-model="form.targetReturnPct" placeholder="留空使用上级设置" inputmode="decimal"><template #append>%</template></el-input></el-form-item>
       <el-form-item label="计算口径"><el-radio-group v-model="form.calculationBasis"><el-radio value="GROSS">毛收益</el-radio><el-radio value="NET">净收益</el-radio></el-radio-group></el-form-item>
       <el-form-item label="提醒"><el-switch v-model="form.alertEnabled" /></el-form-item>
