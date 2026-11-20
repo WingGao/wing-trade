@@ -375,3 +375,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 16: 前端移动端高信息密度视图适配
+<!-- trellis-session: v=2 fp=6e539ea19dd211f5 -->
+
+**Date**: 2026-11-20
+**Task**: 前端移动端高信息密度视图适配
+**Branch**: `master`
+
+### Summary
+
+完成前端除管理员页外的全业务页面与弹窗移动端高信息密度适配（768px 分端视口、零横向溢出、总览活动仓位全展开与排序、详情页双端活动仓位切换与可折叠操作栏/分时图），通过 type-check、build 与全量 37 条 Playwright E2E，并补充前端规范文档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0380c9e` | feat: 新增前端移动端高信息密度视图适配与详情页活动仓位切换 |
+| `0826c2c` | docs(spec): 补充移动端高信息密度视图契约规范 |
+
+### Status
+
+[OK] **Completed**
