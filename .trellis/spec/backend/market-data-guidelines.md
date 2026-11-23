@@ -187,3 +187,32 @@ return latest_price * remaining_qty - remaining_cost
 
 - 单元测试（`backend/tests/unit/test_open_fund_market_data.py`）：覆盖 `OF` 市场/日历、`EastmoneyFundQuoteProvider` 正常解析/缺省涨跌幅计算/无效行/部分失败/全失败/响应超限、`CompositeQuoteProvider` 混合路由与单源容错、`SecurityInfoProvider` 场内 ETF 与场外基金区分及 `fund_nav_history` 升序与 5 分钟缓存。
 - 集成测试（`backend/tests/integration/test_open_fund_api.py`）：覆盖查名、建档、小数份额与四位净值买卖配对、`seriesKind="nav"` 与 `Dashboard` 估值端到端闭环。
+
+---
+
+## Scenario: 美股（US）公开批量实时行情、盘前/盘后扩展时段与多账户日历
+
+### 1. Scope / Trigger
+
+- 触发条件：修改美股批量行情源、美股盘前/盘后交易日历、美股分时曲线（`iscr=1`）或 Dashboard 按账户币种选择交易日历的逻辑。
+- 美股复用 `USD` 账户与共享 `quote_cache` 表，零数据库表结构变更，与 A 股和场外基金在 `CompositeQuoteProvider` 中按市场路由且独立容错。
+
+### 2. Signatures
+
+- `MarketSessionPhase = Literal["pre", "regular", "post", "closed"]`
+- `USTradingCalendar.session_phase(value=None) -> MarketSessionPhase`：盘前 `04:00–09:30 ET`、常规盘 `09:30–16:00 ET`、盘后 `16:00–20:00 ET`、其余休市；`is_session_open()` 在 `pre`/`regular`/`post` 均返回 `True`。
+- `USMarketResolver`：线程安全有界 LRU 缓存 + 东方财富 `suggest` 精确匹配 `105/106/107` 交易所编号。
+- `TencentUSQuoteProvider` & `EastmoneyUSQuoteProvider` & `FallbackUSQuoteProvider`：美股默认优先腾讯公开批量接口（`qt.gtimg.cn/q=us...`，无需交易所编号、覆盖 VOO/SPY 等美股 ETF），缺失或失败时自动回退东方财富美股源。
+- `QuoteSnapshot.market_session` / `QuoteRead.marketSession` / `DashboardRead.marketSession`
+
+### 3. Contracts
+
+- **盘前/盘后报价选取**：在美东盘前或盘后时段，若 `ulist.np/get` 返回有效正数扩展价 `f251`，优先作为当前活跃 `last_price` 并标注 `market_session="pre"|"post"`；若 `f253` 缺失则按参考收盘价精确计算涨跌幅；无扩展成交时平滑回退常规价 `f2`，绝不伪造价格。
+- **测试隔离原则**：向 `EastmoneyUSQuoteProvider` 或 `SecurityInfoProvider` 显式注入自定义 `transport` 且未指定 `resolver` 时，必须使用独立的 `USMarketResolver` 实例，避免污染进程级共享缓存。
+- **美股分时与跨午夜**：`SecurityInfoProvider.intraday()` 对 `US:*` 传 `iscr=1` 拉取盘前/盘后分钟点；东财时间字符串先按 `Asia/Shanghai` 解析转 UTC，再按 `America/New_York` 归属美股交易日。
+- **Dashboard 账户日历感知**：`DashboardService.build()` 按 `account.currency` 选择交易日历（`USD` 使用 `USTradingCalendar`，`CNY` 使用 `AShareTradingCalendar`），与 A 股保持一致的 10s/60s 轮询契约。
+
+### 4. Tests Required
+
+- 单元测试（`backend/tests/unit/test_us_market_data.py`）：覆盖美股四时段日历、`USMarketResolver` 缓存与精确匹配、盘前/盘中/盘后快照解析与回退、未知市场码 `105/106/107` 探测、三市场组合路由、美股分时 `iscr=1` 与跨北京午夜归属。
+- 集成测试（`backend/tests/integration/test_us_stock_api.py`）：覆盖创建 USD 账户、美股建档、碎股小数含费买卖配对、美股盘前 Dashboard 估值与 10s 轮询、按账户筛选流水/复盘汇总及美股盘前分时接口。
