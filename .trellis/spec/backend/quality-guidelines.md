@@ -35,6 +35,8 @@ development dependencies are available.
   audit events.
 - If a dependency is unavailable, report the exact skipped command; do not claim
   it passed.
+- 本地与受限环境下使用 `uv run` 运行后端检查/测试时，统一携带 `--cache-dir .uv-cache --offline --no-sync --project backend`，避免访问全局 `uv` 缓存目录导致权限拒绝或触发联网。
+- Windows 沙箱环境会阻塞 Python `asyncio.run(...)` 及 FastAPI `TestClient` 所需的本地 loopback socketpair，导致异步单测（如 `test_security_info.py`）和集成测试挂起；纯同步单测可在沙箱内直接运行，全量 `pytest backend/tests` 需在非沙箱环境下执行。
 
 ## Code Review Checklist
 
@@ -103,4 +105,61 @@ requests = MatchingService.auto_preview(lots, qty, method=MatchingMethod.LIFO)
 ```python
 preview = api.preview_sell(..., matching_method=MatchingMethod.LIFO)
 api.sell(..., matches=[MatchRequest(m.lot_id, m.matched_qty) for m in preview.matches])
+```
+
+## Scenario: 结构化 YAML 配置优先与环境变量回退
+
+### 1. Scope / Trigger
+
+- 触发条件：新增、修改应用配置项（`backend/app/config.py`）、YAML 模板（`config.example.yaml`）或容器环境变量透传（`compose.yaml`）。
+- 属于基础设施配置边界，必须在单点维护白名单 schema、优先级与校验规则。
+
+### 2. Signatures
+
+- `Settings.load(config_file: str | os.PathLike[str] | None = None, *, discover_default: bool = True) -> Settings`
+- `Settings.from_env() -> Settings`（兼容入口，内部委托 `Settings.load()`）
+- 模块级实例：`settings = Settings.load()`
+
+### 3. Contracts
+
+- **加载优先级（字段级）**：`YAML 配置 > 环境变量（env）> 内置默认值`。
+- **路径查找顺序**：显式 `config_file` 参数 > 环境变量 `CONFIG_FILE` > 当前工作目录 `config.yaml` / `config.yml` > 项目根目录 `config.yaml` / `config.yml` > 无文件（回退纯 env 与默认值）。
+- **结构化分组**：仅允许顶层分组 `database`（含 `mysql`）、`logging`、`quote`、`auth`、`email`（含 `smtp`）、`frontend`，受 `_YAML_SCHEMA` 白名单约束。
+- **空值与假值**：省略或 `null` 回退 env；布尔 `false` 与数字 `0` 视为显式值不回退 env；密码字段（`database.mysql.password`、`email.smtp.password`）禁止 `strip()`。
+- **测试隔离**：`backend/tests/conftest.py` 默认隔离 `CONFIG_FILE` 与 `_default_config_candidates`，防止开发者本地 `config.yaml` 污染单元测试。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 必须结果 |
+|---|---|
+| 显式 `config_file` 或 `CONFIG_FILE` 不存在 | 抛出 `ValueError`（含路径），禁止静默回退 |
+| YAML 语法错误或根节点非 mapping | 抛出 `ValueError` |
+| YAML 包含未知分组或未知键 | 抛出 `ValueError("Unknown config key: <path>")` |
+| 布尔值传入端口或正整数（如 `port: true`） | 抛出 `ValueError`（显式拦截 `isinstance(raw, bool)`） |
+| MySQL / SMTP 必填项缺失或 TLS/SSL 同时为 true | 抛出 `ValueError` |
+
+### 5. Good / Base / Bad Cases
+
+- Good：YAML 仅覆盖 `database.mysql.host` 与 `auth.cookie_secure: false`，其余项回退 env，且 `cookie_secure` 保持 `False`。
+- Base：无 YAML 文件且未设 `CONFIG_FILE` 时，完全保持既有纯环境变量行为。
+- Bad：使用 `yaml_val or os.getenv(...)` 导致 `false` 被环境变量覆盖，或把 `config.yaml` 静默忽略掉未知拼写键。
+
+### 6. Tests Required
+
+- 单元测试覆盖：完整结构化 YAML 覆盖 env（含假值）、部分 YAML + `null` 回退、默认发现顺序（`config.yaml` > `config.yml`）、空 YAML 文件、异常拦截（缺失/语法/非 mapping/未知键/布尔误传整数），以及直接加载根目录 `config.example.yaml` 校验模板不漂移。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 错误：truthiness 判断会导致 YAML 的 false 回退到环境变量
+cookie_secure = yaml_config.get("auth", {}).get("cookie_secure") or os.getenv("AUTH_COOKIE_SECURE")
+```
+
+#### Correct
+
+```python
+# 正确：仅在 YAML 缺失或为 None 时回退环境变量
+cookie_secure = _resolve_bool(yaml_config, ("auth", "cookie_secure"), "AUTH_COOKIE_SECURE", default=False)
 ```
