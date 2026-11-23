@@ -421,3 +421,27 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 支持场外开放式基金简单买卖与已公布净值
+<!-- trellis-session: v=2 fp=8d8e217564f580ad -->
+
+**Date**: 2026-11-23
+**Task**: 支持场外开放式基金简单买卖与已公布净值
+**Branch**: `master`
+
+### Summary
+
+新增场外开放式基金（OF/FUND）支持，接入东方财富已公布单位净值行情源与近期净值曲线，适配前端小数份额、四位净值展示并补充个股详情批次成本总价与现价，补齐单测、集成测试与 spec 规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b6c647` | feat(backend): 支持场外开放式基金建档、已公布单位净值行情与近期净值曲线 |
+| `c50d5aa` | feat(frontend): 适配场外基金展示与近期净值图，并补充批次成本总价与现价 |
+| `b133823` | docs(spec): 补充场外开放式基金已公布净值与近期曲线契约 |
+
+### Status
+
+[OK] **Completed**
