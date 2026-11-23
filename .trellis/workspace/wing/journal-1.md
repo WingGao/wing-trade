@@ -398,3 +398,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: 支持优先读取结构化 YAML 配置并回退环境变量
+<!-- trellis-session: v=2 fp=57930d2a2de72a79 -->
+
+**Date**: 2026-11-23
+**Task**: 支持优先读取结构化 YAML 配置并回退环境变量
+**Branch**: `master`
+
+### Summary
+
+实现后端结构化 YAML 优先读取与字段级环境变量回退，补齐 config.example.yaml、.gitignore、compose.yaml、README、141 项测试与后端配置及测试契约规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `99b8ab6` | feat: 支持优先读取结构化 YAML 配置并回退环境变量 |
+| `38367dd` | docs(spec): 补充结构化 YAML 配置契约与后端测试运行约定 |
+
+### Status
+
+[OK] **Completed**
