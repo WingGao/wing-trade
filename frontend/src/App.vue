@@ -102,20 +102,23 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { setUnauthorizedHandler } from './api/client'
-import type { Currency } from './api/types'
+import type { Currency, DashboardPosition } from './api/types'
 import CreateAccountDialog from './components/CreateAccountDialog.vue'
 import { useAccountsStore } from './stores/accounts'
 import { useAuthStore } from './stores/auth'
+import { useLedgerStore } from './stores/ledger'
 import { useViewport } from './utils/viewport'
 
 const auth = useAuthStore()
 const accountsStore = useAccountsStore()
+const ledgerStore = useLedgerStore()
 const route = useRoute()
 const router = useRouter()
 const { isMobile } = useViewport()
 const loggingOut = ref(false)
 const createAccountVisible = ref(false)
 const createDefaultCurrency = ref<Currency>('USD')
+let accountSwitchSequence = 0
 
 const isPublicRoute = computed(() => Boolean(route.meta.public))
 /** 计算当前页面标题，供移动端极简顶栏展示。 */
@@ -127,9 +130,46 @@ function isNavActive(path: string): boolean {
   return route.path === path
 }
 
-/** 切换全局资金账户。 */
-function handleAccountChange(accountId: string): void {
+/** 按当前涨幅降序挑出目标账户的第一个有效活动持仓，与详情页活动仓位列表排序一致。 */
+function pickFirstActivePosition(positions: DashboardPosition[]): DashboardPosition | null {
+  const sorted = [...positions]
+    .filter((position) => Boolean(position.market && position.symbol))
+    .sort((left, right) => {
+      const leftVal = Number(left.quote?.changePct)
+      const rightVal = Number(right.quote?.changePct)
+      const leftValid = Number.isFinite(leftVal)
+      const rightValid = Number.isFinite(rightVal)
+      if (!leftValid && !rightValid) return 0
+      if (!leftValid) return 1
+      if (!rightValid) return -1
+      return rightVal - leftVal
+    })
+  return sorted[0] ?? null
+}
+
+/** 切换全局资金账户；若当前停留在个股详情页，则跳转到目标账户的第一个持仓详情（无持仓时回到总览）。 */
+async function handleAccountChange(accountId: string): Promise<void> {
   accountsStore.setActiveAccount(accountId)
+  if (!route.path.startsWith('/security/')) return
+  const requestId = ++accountSwitchSequence
+  const snapshot = await ledgerStore.loadDashboard({
+    accountId,
+    includeClosed: false,
+    mode: 'cache',
+  })
+  if (requestId !== accountSwitchSequence || !route.path.startsWith('/security/')) return
+  const first = snapshot ? pickFirstActivePosition(snapshot.positions) : null
+  if (first?.market && first?.symbol) {
+    await router.push({
+      path: `/security/${first.market}/${first.symbol}`,
+      query: {
+        accountId,
+        strategyId: first.strategyId,
+      },
+    })
+    return
+  }
+  await router.push('/dashboard')
 }
 
 /** 打开新建资金账户弹窗，若当前尚无美元账户则默认推荐 USD。 */

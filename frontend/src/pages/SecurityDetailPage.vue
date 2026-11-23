@@ -12,6 +12,7 @@ import ProfitTargetDialog from '../components/ProfitTargetDialog.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
 import IntradayChart from '../components/IntradayChart.vue'
 import QuoteBadge from '../components/QuoteBadge.vue'
+import { useAccountsStore } from '../stores/accounts'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLedgerStore } from '../stores/ledger'
 import { formatDateTime, formatMoney, formatQuantity, formatSignedPercent, isFundSecurity, priceDigits, trendClass } from '../utils/format'
@@ -20,6 +21,7 @@ import { useViewport } from '../utils/viewport'
 
 const route = useRoute()
 const router = useRouter()
+const accountsStore = useAccountsStore()
 const preferences = usePreferencesStore()
 const ledger = useLedgerStore()
 const { isMobile } = useViewport()
@@ -49,7 +51,7 @@ const mobileChartOpen = ref(false)
 const selectedLotId = ref('')
 const selectedLot = computed(() => lots.value.find((lot) => lot.id === selectedLotId.value))
 const isFund = computed(() => isFundSecurity(security.value ?? { market: String(route.params.market ?? '') }))
-const currency = computed<Currency>(() => security.value?.currency ?? (security.value?.market === 'US' ? 'USD' : 'CNY'))
+const currency = computed<Currency>(() => security.value?.currency ?? ((security.value?.market ?? String(route.params.market ?? '')).toUpperCase() === 'US' ? 'USD' : 'CNY'))
 const matchingAccounts = computed(() => accounts.value.filter((account) => account.currency === currency.value))
 const requestedStrategyId = computed(() => typeof route.query.strategyId === 'string' ? route.query.strategyId : undefined)
 const refreshScope = computed<PositionRefreshScope | null>(() => security.value && accountId.value ? { accountId: accountId.value, securityId: security.value.id, strategyId: resolvedStrategyId.value ?? requestedStrategyId.value, market: security.value.market, symbol: security.value.symbol, name: security.value.name } : null)
@@ -63,8 +65,15 @@ const holdingSummaryStale = computed(() => holdingSummary.value?.unrealizedPnl !
 const hasOpenLots = computed(() => lots.value.some((lot) => lot.status === 'OPEN'))
 /** 判断服务端汇总是否包含仍有剩余数量的未结清批次。 */
 const hasRemainingHolding = computed(() => Boolean(holdingSummary.value && /[1-9]/.test(holdingSummary.value.remainingQty)))
-/** 按当前涨幅降序排列活动仓位，无有效行情的持仓排在末尾，供详情页快速切换。 */
+/** 按当前涨幅降序排列当前账户的活动仓位，无有效行情的持仓排在末尾，供详情页快速切换。 */
 const activePositions = computed<DashboardPosition[]>(() => {
+  const snapshot = ledger.dashboard
+  if (!snapshot) return []
+  if (accountId.value) {
+    if (snapshot.accountId !== accountId.value) return []
+  } else if (snapshot.currency && snapshot.currency !== currency.value) {
+    return []
+  }
   return [...ledger.positions]
     .filter((position) => Boolean(position.market && position.symbol))
     .sort((left, right) => {
@@ -87,23 +96,24 @@ function isCurrentPosition(position: DashboardPosition): boolean {
   )
 }
 
-/** 从详情页活动仓位列表切换到目标个股，并保留快照账户与策略范围。 */
+/** 从详情页活动仓位列表切换到目标个股，并保留当前账户与策略范围。 */
 function switchPosition(position: DashboardPosition): void {
   if (!position.market || !position.symbol || isCurrentPosition(position)) return
   void router.push({
     path: `/security/${position.market}/${position.symbol}`,
     query: {
-      accountId: ledger.dashboard?.accountId ?? (accountId.value || undefined),
+      accountId: accountId.value || ledger.dashboard?.accountId || undefined,
       strategyId: position.strategyId,
     },
   })
 }
 
-/** 仅在尚未缓存首页快照时静默拉取缓存活动仓位，不阻塞详情页主加载。 */
-function ensureActivePositions(): void {
-  if (ledger.dashboard) return
+/** 确保活动仓位快照与当前账户一致，未命中时静默拉取目标账户缓存快照，不阻塞详情页主加载。 */
+function ensureActivePositions(targetAccountId = accountId.value): void {
+  if (!targetAccountId) return
+  if (ledger.dashboard?.accountId === targetAccountId) return
   void ledger.loadDashboard({
-    accountId: accountId.value || undefined,
+    accountId: targetAccountId,
     includeClosed: false,
     mode: 'cache',
   })
@@ -229,7 +239,7 @@ async function loadPage() {
   try {
     const market = String(route.params.market).toUpperCase()
     const symbol = String(route.params.symbol).toUpperCase()
-    const [found, availableAccounts] = await Promise.all([api.securities(symbol), api.accounts()])
+    const [found, availableAccounts] = await Promise.all([api.securities(symbol), accountsStore.loadAccounts()])
     if (!alive || request !== generation) return
     security.value = found.find((item) => item.market.toUpperCase() === market && item.symbol.toUpperCase() === symbol) ?? null
     accounts.value = availableAccounts
@@ -238,6 +248,8 @@ async function loadPage() {
     if (requestedAccount && !matchingAccounts.value.some((account) => account.id === requestedAccount)) throw new Error('指定账户不存在或与当前证券币种不匹配')
     if (requestedAccount) accountId.value = requestedAccount
     else if (!matchingAccounts.value.some((account) => account.id === accountId.value)) accountId.value = matchingAccounts.value[0]?.id ?? ''
+    if (accountId.value) accountsStore.setActiveAccount(accountId.value)
+    ensureActivePositions(accountId.value)
     await loadLots()
     if (alive && request === generation) void refreshMarket()
   } catch (cause) { if (request === generation) pageError.value = cause instanceof Error ? cause.message : '加载个股失败' }
@@ -291,7 +303,8 @@ watch(() => [accountId.value, preferences.includeClosed] as const, ([account], p
   // 查询范围或开关改变后立即清空旧明细，失败与乱序响应也不能恢复其他范围的数据。
   closedTradeDetails.value = []
   if (alive && !loading.value) {
-    if (account !== previous[0]) {
+    const accountChanged = account !== previous[0]
+    if (accountChanged) {
       generation += 1
       resolvedStrategyId.value = undefined
       lots.value = []
@@ -299,9 +312,13 @@ watch(() => [accountId.value, preferences.includeClosed] as const, ([account], p
       needsRefresh.value = false
     }
     if (!mutationActive.value) void reloadLots()
+    if (accountChanged) {
+      if (account) accountsStore.setActiveAccount(account)
+      ensureActivePositions(account)
+    }
   }
 })
-onMounted(() => { alive = true; document.addEventListener('visibilitychange', handleVisibility); ensureActivePositions(); void loadPage() })
+onMounted(() => { alive = true; document.addEventListener('visibilitychange', handleVisibility); void loadPage() })
 onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clearTimer(); document.removeEventListener('visibilitychange', handleVisibility) })
 </script>
 
