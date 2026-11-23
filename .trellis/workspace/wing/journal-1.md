@@ -445,3 +445,27 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: 支持美股公开实时行情、盘前盘后与多账户管理
+<!-- trellis-session: v=2 fp=cfd27818fb35070d -->
+
+**Date**: 2026-11-23
+**Task**: 支持美股公开实时行情、盘前盘后与多账户管理
+**Branch**: `master`
+
+### Summary
+
+实现美股公开批量实时行情（腾讯主源+东财回退，覆盖VOO等ETF）、盘前/盘中/盘后扩展日历与分时回退、Dashboard按账户币种切换日历；前端新增全局账户切换与美元账户创建，补齐总览/流水/复盘多币种及美股碎股与买卖费用录入，后端158项测试与前端构建全绿。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5ab466c` | feat(backend): 支持美股公开批量实时行情、盘前盘后扩展时段与多账户日历 |
+| `2a2bbb4` | feat(frontend): 新增全局账户切换与美元账户管理，适配美股盘前盘后、碎股与费用录入 |
+| `618bf7f` | docs(spec): 补充美股公开行情、盘前盘后与扩展日历契约及任务文档 |
+
+### Status
+
+[OK] **Completed**
