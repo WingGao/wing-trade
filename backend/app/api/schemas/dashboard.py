@@ -23,6 +23,7 @@ class QuoteRead(APIModel):
     fetched_at: datetime | None = None
     provider: str | None = None
     is_stale: bool = True
+    market_session: Literal["pre", "regular", "post", "closed"] | None = None
 
 
 class LowestPriceGroupRead(APIModel):
@@ -95,6 +96,7 @@ class DashboardRead(APIModel):
     currency: str
     as_of: datetime
     market_session_open: bool
+    market_session: Literal["pre", "regular", "post", "closed"] = "closed"
     poll_after_seconds: Literal[10, 60]
     positions: list[DashboardPositionRead] = Field(default_factory=list)
     pending_refresh_scopes: list[PendingRefreshScopeRead] = Field(default_factory=list)

@@ -77,8 +77,12 @@ class QuoteService:
                 continue
             fetched_at = self._as_utc(row.fetched_at)
             source_time = self._as_utc(row.source_time) if row.source_time is not None else None
-            stale = row.is_stale or self.calendar_for_security(security).is_stale(
-                fetched_at, now=current
+            calendar = self.calendar_for_security(security)
+            stale = row.is_stale or calendar.is_stale(fetched_at, now=current)
+            market_session = (
+                None
+                if security.market.upper() == "OF"
+                else calendar.session_phase(source_time or fetched_at)
             )
             try:
                 result.append(
@@ -91,6 +95,7 @@ class QuoteService:
                         fetched_at=fetched_at,
                         provider=row.provider,
                         is_stale=stale,
+                        market_session=market_session,
                     )
                 )
             except (TypeError, ValueError):

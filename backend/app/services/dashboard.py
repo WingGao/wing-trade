@@ -51,7 +51,9 @@ class DashboardService:
         account = session.get(Account, account_id)
         if account is None:
             raise ValueError(f"account was not found: {account_id}")
-        session_open = self.calendar.is_session_open(current)
+        account_calendar = self._calendar_for_account(account)
+        market_session = account_calendar.session_phase(current)
+        session_open = account_calendar.is_session_open(current)
         lots = self._load_lots(session, account_id, include_closed=include_closed)
         groups = self._group_lots(lots)
         securities = self._requested_securities(session, account_id, groups)
@@ -92,6 +94,7 @@ class DashboardService:
             "currency": account.currency,
             "asOf": current,
             "marketSessionOpen": session_open,
+            "marketSession": market_session,
             "pollAfterSeconds": 10 if session_open else 60,
             "positions": positions,
             "pendingRefreshScopes": pending_scopes,
@@ -101,6 +104,12 @@ class DashboardService:
                 for security in securities
             ],
         }
+
+    def _calendar_for_account(self, account: Account) -> Any:
+        """按账户结算币种选择对应的交易日历（USD 使用美股日历，CNY 使用 A 股日历）。"""
+        if account.currency.upper() == "USD":
+            return self.quote_service.us_calendar
+        return self.calendar
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
@@ -471,4 +480,5 @@ class DashboardService:
             "fetchedAt": snapshot.fetched_at if snapshot is not None else None,
             "provider": snapshot.provider if snapshot is not None else None,
             "isStale": True if snapshot is None else snapshot.is_stale,
+            "marketSession": snapshot.market_session if snapshot is not None else None,
         }

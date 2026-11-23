@@ -1234,6 +1234,7 @@ async def list_quotes(
                 "fetchedAt": _dt(snapshot.fetched_at) if snapshot else None,
                 "provider": snapshot.provider if snapshot else None,
                 "isStale": True if snapshot is None else snapshot.is_stale,
+                "marketSession": snapshot.market_session if snapshot else None,
             }
         )
     return {"quotes": items}

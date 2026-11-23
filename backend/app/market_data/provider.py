@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timezone
@@ -12,7 +15,7 @@ from urllib.request import Request, urlopen
 
 from app.domain.precision import ensure_decimal, round_price
 
-from .calendar import AShareTradingCalendar
+from .calendar import AShareTradingCalendar, MarketSessionPhase, USTradingCalendar
 
 
 def _now() -> datetime:
@@ -39,6 +42,7 @@ class QuoteSnapshot:
     fetched_at: datetime = field(default_factory=_now)
     provider: str = "unknown"
     is_stale: bool = False
+    market_session: MarketSessionPhase | None = None
 
     def __post_init__(self) -> None:
         """规范证券代码并校验、量化报价数值。"""
@@ -69,6 +73,7 @@ class QuoteSnapshot:
             fetched_at=self.fetched_at,
             provider=self.provider,
             is_stale=True,
+            market_session=self.market_session,
         )
 
 
@@ -428,6 +433,578 @@ class EastmoneyQuoteProvider:
             healthy=True,
             message="行情源已配置，连通性在刷新时检查",
         )
+
+
+_US_SYMBOL_PATTERN = re.compile(r"^[A-Z][A-Z0-9.\-]{0,11}$")
+_US_UPSTREAM_MARKETS = ("105", "106", "107")
+
+
+class USMarketResolver:
+    """线程安全的美股东方财富交易所编号（105/106/107）解析与 LRU 缓存器。"""
+
+    _search_url = "https://searchapi.eastmoney.com/api/suggest/get"
+    _max_response_bytes = 2 * 1024 * 1024
+
+    def __init__(
+        self,
+        *,
+        transport: Callable[[Request, float], bytes] | None = None,
+        timeout_seconds: Decimal | str | int | float = Decimal("5"),
+        max_cached: int = 512,
+    ) -> None:
+        """初始化美股市场码缓存与可注入 HTTP 传输。"""
+        if max_cached <= 0:
+            raise ValueError("max_cached must be positive")
+        self._transport = transport or EastmoneyQuoteProvider()._default_transport
+        self._timeout_seconds = float(
+            Decimal(str(timeout_seconds))
+            if isinstance(timeout_seconds, float)
+            else ensure_decimal(timeout_seconds, field="timeout_seconds")
+        )
+        self._max_cached = max_cached
+        self._cache: OrderedDict[str, str] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get_cached(self, code: str) -> str | None:
+        """读取已缓存的美股交易所编号，不发起网络请求。"""
+        normalized = code.strip().upper()
+        with self._lock:
+            market = self._cache.get(normalized)
+            if market is not None:
+                self._cache.move_to_end(normalized)
+            return market
+
+    def remember(self, code: str, upstream_market: str) -> None:
+        """将已确认的美股交易所编号写入有界 LRU 缓存。"""
+        normalized = code.strip().upper()
+        market = str(upstream_market).strip()
+        if not normalized or market not in _US_UPSTREAM_MARKETS:
+            return
+        with self._lock:
+            self._cache[normalized] = market
+            self._cache.move_to_end(normalized)
+            while len(self._cache) > self._max_cached:
+                self._cache.popitem(last=False)
+
+    def resolve(
+        self,
+        code: str,
+        *,
+        transport: Callable[[Request, float], bytes] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> str | None:
+        """优先读取缓存，未命中时调用东方财富查名接口解析美股交易所编号。"""
+        normalized = code.strip().upper()
+        if not normalized:
+            return None
+        cached = self.get_cached(normalized)
+        if cached is not None:
+            return cached
+        query = urlencode(
+            {
+                "input": normalized,
+                "type": "14",
+                "token": "D43BF722C8E33BDC906FB84D85E326E8",
+                "count": "20",
+            }
+        )
+        request = Request(
+            f"{self._search_url}?{query}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "wing-trade/0.1 (+backend market data)",
+                "Referer": "https://quote.eastmoney.com/",
+            },
+        )
+        active_transport = transport or self._transport
+        active_timeout = timeout_seconds if timeout_seconds is not None else self._timeout_seconds
+        try:
+            body = active_transport(request, active_timeout)
+            if len(body) > self._max_response_bytes:
+                return None
+            payload = json.loads(
+                body.decode("utf-8-sig") if isinstance(body, bytes) else str(body),
+                parse_float=Decimal,
+                parse_constant=EastmoneyQuoteProvider._reject_json_constant,
+            )
+        except Exception:
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        quotation = payload.get("QuotationCodeTable")
+        if not isinstance(quotation, Mapping):
+            return None
+        rows = quotation.get("Data")
+        if not isinstance(rows, list):
+            return None
+        matched: str | None = None
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            row_code = str(row.get("Code") or "").strip().upper()
+            upstream_market = str(row.get("MktNum", row.get("MarketType", ""))).strip()
+            if upstream_market in _US_UPSTREAM_MARKETS and row_code:
+                self.remember(row_code, upstream_market)
+                if row_code == normalized and matched is None:
+                    matched = upstream_market
+        return matched
+
+
+_SHARED_US_MARKET_RESOLVER = USMarketResolver()
+
+
+def shared_us_market_resolver() -> USMarketResolver:
+    """返回进程级共享的美股交易所编号解析器，供批量行情与分时共用。"""
+    return _SHARED_US_MARKET_RESOLVER
+
+
+class EastmoneyUSQuoteProvider:
+    """东方财富美股批量行情源，支持常规交易时段与盘前/盘后扩展时段报价。"""
+
+    name = "eastmoney-us"
+    supported_markets = frozenset({"US"})
+    _endpoint = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    _fields = "f12,f13,f14,f2,f3,f18,f124,f251,f253,f292"
+    _max_response_bytes = 2 * 1024 * 1024
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: Decimal | str | int | float = Decimal("5"),
+        transport: Callable[[Request, float], bytes] | None = None,
+        now: Callable[[], datetime] | None = None,
+        resolver: USMarketResolver | None = None,
+        calendar: USTradingCalendar | None = None,
+        max_batch_size: int = 100,
+        max_symbols: int = 500,
+    ) -> None:
+        """校验超时和批量限制，并保存可注入传输、时钟与美股市场码解析器。"""
+        timeout = (
+            Decimal(str(timeout_seconds))
+            if isinstance(timeout_seconds, float)
+            else ensure_decimal(timeout_seconds, field="timeout_seconds")
+        )
+        if not timeout.is_finite() or timeout <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
+        if max_batch_size <= 0 or max_batch_size > 100:
+            raise ValueError("max_batch_size must be between 1 and 100")
+        if max_symbols <= 0:
+            raise ValueError("max_symbols must be positive")
+        self.timeout_seconds = timeout
+        self._transport = transport or EastmoneyQuoteProvider()._default_transport
+        self._now = now or _now
+        self._resolver = (
+            resolver
+            if resolver is not None
+            else (
+                USMarketResolver(transport=transport, timeout_seconds=timeout)
+                if transport is not None
+                else shared_us_market_resolver()
+            )
+        )
+        self._calendar = calendar or USTradingCalendar()
+        self.max_batch_size = max_batch_size
+        self.max_symbols = max_symbols
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """判断证券是否属于美股市场且代码格式合法。"""
+        canonical = canonical_symbol(symbol)
+        if ":" not in canonical:
+            return False
+        market, code = canonical.split(":", 1)
+        return market in self.supported_markets and bool(_US_SYMBOL_PATTERN.match(code))
+
+    def _request_secids(self, secids: Sequence[str]) -> list[dict[str, object]]:
+        """按东方财富 secid 列表批量请求美股行情快照。"""
+        query = urlencode({"fltt": "2", "invt": "2", "secids": ",".join(secids), "fields": self._fields})
+        request = Request(
+            f"{self._endpoint}?{query}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "wing-trade/0.1 (+backend market data)",
+                "Referer": "https://quote.eastmoney.com/",
+            },
+        )
+        body = self._transport(request, float(self.timeout_seconds))
+        if len(body) > self._max_response_bytes:
+            raise ValueError("eastmoney us response exceeds size limit")
+        text = body.decode("utf-8-sig") if isinstance(body, bytes) else str(body)
+        payload = json.loads(
+            text,
+            parse_float=Decimal,
+            parse_int=int,
+            parse_constant=EastmoneyQuoteProvider._reject_json_constant,
+        )
+        if not isinstance(payload, Mapping):
+            raise ValueError("eastmoney us response must be an object")
+        data = payload.get("data")
+        if not isinstance(data, Mapping):
+            return []
+        rows = data.get("diff", [])
+        if not isinstance(rows, list):
+            raise ValueError("eastmoney us data.diff must be a list")
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _snapshot_from_row(
+        self,
+        row: Mapping[str, object],
+        *,
+        symbol: str,
+        fetched_at: datetime,
+    ) -> QuoteSnapshot | None:
+        """将美股上游记录转换为精确快照；盘前/盘后优先采信有效扩展成交价并标注时段。"""
+        try:
+            regular_price = EastmoneyQuoteProvider._optional_decimal(
+                row.get("f2"), field_name="last_price"
+            )
+            prev_close = EastmoneyQuoteProvider._optional_decimal(
+                row.get("f18"), field_name="prev_close"
+            )
+            ext_price = EastmoneyQuoteProvider._optional_decimal(
+                row.get("f251"), field_name="ext_price"
+            )
+        except (TypeError, ValueError):
+            return None
+        if prev_close is not None and prev_close <= 0:
+            return None
+        try:
+            regular_change = EastmoneyQuoteProvider._optional_decimal(
+                row.get("f3"), field_name="change_pct"
+            )
+        except (TypeError, ValueError):
+            regular_change = None
+        try:
+            ext_change = EastmoneyQuoteProvider._optional_decimal(
+                row.get("f253"), field_name="ext_change_pct"
+            )
+        except (TypeError, ValueError):
+            ext_change = None
+
+        source_time = EastmoneyQuoteProvider._source_time(row.get("f124"))
+        current_phase = self._calendar.session_phase(fetched_at)
+        if current_phase in {"pre", "post"} and ext_price is not None and ext_price > 0:
+            # 盘前基准为昨收，盘后基准优先为当日常规收盘价（回退昨收）。
+            reference_close = regular_price if current_phase == "post" and regular_price and regular_price > 0 else prev_close
+            change_pct = ext_change
+            if change_pct is None and reference_close is not None and reference_close > 0:
+                change_pct = round_price((ext_price - reference_close) / reference_close * Decimal("100"))
+            return QuoteSnapshot(
+                symbol=symbol,
+                last_price=ext_price,
+                prev_close=reference_close,
+                change_pct=change_pct,
+                source_time=source_time or fetched_at,
+                fetched_at=fetched_at,
+                provider=self.name,
+                market_session=current_phase,
+            )
+
+        if regular_price is None or regular_price <= 0:
+            return None
+        resolved_phase = self._calendar.session_phase(source_time or fetched_at)
+        return QuoteSnapshot(
+            symbol=symbol,
+            last_price=regular_price,
+            prev_close=prev_close,
+            change_pct=regular_change,
+            source_time=source_time,
+            fetched_at=fetched_at,
+            provider=self.name,
+            market_session=resolved_phase,
+        )
+
+    def _build_secids_for_batch(self, batch: Sequence[str]) -> tuple[list[str], dict[str, str]]:
+        """为一批美股代码构造 secid 列表，未命中市场码时回退探测 105/106/107。"""
+        secids: list[str] = []
+        canonical_by_code: dict[str, str] = {}
+        for canonical in batch:
+            _, code = canonical.split(":", 1)
+            canonical_by_code[code] = canonical
+            upstream_market = self._resolver.resolve(
+                code,
+                transport=self._transport,
+                timeout_seconds=float(self.timeout_seconds),
+            )
+            if upstream_market is not None:
+                secids.append(f"{upstream_market}.{code}")
+            else:
+                for candidate_market in _US_UPSTREAM_MARKETS:
+                    secids.append(f"{candidate_market}.{code}")
+        return secids, canonical_by_code
+
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """批量获取美股常规及盘前/盘后行情快照。"""
+        requested: list[str] = []
+        seen: set[str] = set()
+        for value in symbols:
+            canonical = canonical_symbol(value)
+            if canonical in seen or not self.supports_symbol(canonical):
+                continue
+            seen.add(canonical)
+            requested.append(canonical)
+        if not requested:
+            return {}
+        if len(requested) > self.max_symbols:
+            raise ValueError("eastmoney us quote request exceeds cumulative symbol limit")
+
+        result: dict[str, QuoteSnapshot] = {}
+        batch_error: Exception | None = None
+        for offset in range(0, len(requested), self.max_batch_size):
+            batch = requested[offset : offset + self.max_batch_size]
+            secids, canonical_by_code = self._build_secids_for_batch(batch)
+            for sub_offset in range(0, len(secids), self.max_batch_size):
+                sub_secids = secids[sub_offset : sub_offset + self.max_batch_size]
+                try:
+                    rows = self._request_secids(sub_secids)
+                except Exception as exc:
+                    batch_error = exc
+                    continue
+                fetched_at = self._now()
+                if fetched_at.tzinfo is None:
+                    fetched_at = fetched_at.replace(tzinfo=UTC)
+                for row in rows:
+                    row_code = str(row.get("f12") or "").strip().upper()
+                    row_market = str(row.get("f13") or "").strip()
+                    resolved_symbol = canonical_by_code.get(row_code)
+                    if resolved_symbol is None or row_market not in _US_UPSTREAM_MARKETS:
+                        continue
+                    snapshot = self._snapshot_from_row(
+                        row, symbol=resolved_symbol, fetched_at=fetched_at
+                    )
+                    if snapshot is not None:
+                        self._resolver.remember(row_code, row_market)
+                        result[resolved_symbol] = snapshot
+        if batch_error is not None and not result:
+            raise batch_error
+        return result
+
+    def health(self) -> ProviderHealth:
+        """报告美股行情源已完成配置，不在健康检查时访问公网。"""
+        return ProviderHealth(
+            provider=self.name,
+            healthy=True,
+            message="美股行情源已配置，连通性在刷新时检查",
+        )
+
+
+class TencentUSQuoteProvider:
+    """腾讯财经美股/美股 ETF 批量公开行情源（无需交易所编号，支持 VOO/SPY 等全量美股）。"""
+
+    name = "tencent-us"
+    supported_markets = frozenset({"US"})
+    _endpoint = "https://qt.gtimg.cn/q="
+    _max_response_bytes = 2 * 1024 * 1024
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: Decimal | str | int | float = Decimal("5"),
+        transport: Callable[[Request, float], bytes] | None = None,
+        now: Callable[[], datetime] | None = None,
+        calendar: USTradingCalendar | None = None,
+        max_batch_size: int = 60,
+        max_symbols: int = 500,
+    ) -> None:
+        """初始化腾讯美股批量行情源的超时、批量上限与可注入传输。"""
+        timeout = (
+            Decimal(str(timeout_seconds))
+            if isinstance(timeout_seconds, float)
+            else ensure_decimal(timeout_seconds, field="timeout_seconds")
+        )
+        if not timeout.is_finite() or timeout <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
+        if max_batch_size <= 0 or max_batch_size > 100:
+            raise ValueError("max_batch_size must be between 1 and 100")
+        if max_symbols <= 0:
+            raise ValueError("max_symbols must be positive")
+        self.timeout_seconds = timeout
+        self._transport = transport or EastmoneyQuoteProvider()._default_transport
+        self._now = now or _now
+        self._calendar = calendar or USTradingCalendar()
+        self.max_batch_size = max_batch_size
+        self.max_symbols = max_symbols
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """判断证券是否属于美股市场且代码格式合法。"""
+        canonical = canonical_symbol(symbol)
+        if ":" not in canonical:
+            return False
+        market, code = canonical.split(":", 1)
+        return market in self.supported_markets and bool(_US_SYMBOL_PATTERN.match(code))
+
+    @staticmethod
+    def _parse_source_time(value: str) -> datetime | None:
+        """将腾讯美股返回的美东时间字符串（YYYY-MM-DD HH:MM:SS）转换为 UTC。"""
+        raw = value.strip()
+        if not raw:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(raw[:19], fmt)
+                return parsed.replace(tzinfo=USTradingCalendar.timezone).astimezone(UTC)
+            except ValueError:
+                continue
+        return None
+
+    def _parse_line(
+        self,
+        line: str,
+        *,
+        canonical_by_code: Mapping[str, str],
+        fetched_at: datetime,
+    ) -> tuple[str, QuoteSnapshot] | None:
+        """解析单行腾讯美股报价（v_usVOO=\"200~...\"）为精确 Decimal 快照。"""
+        if "=" not in line or "~" not in line:
+            return None
+        left, right = line.split("=", 1)
+        prefix = left.strip()
+        if not prefix.startswith("v_us"):
+            return None
+        raw_code = prefix[4:].strip().upper()
+        canonical = canonical_by_code.get(raw_code)
+        if canonical is None:
+            return None
+        payload = right.strip().rstrip(";").strip('"')
+        parts = payload.split("~")
+        if len(parts) < 33:
+            return None
+        try:
+            last_price = EastmoneyQuoteProvider._optional_decimal(parts[3], field_name="last_price")
+            prev_close = EastmoneyQuoteProvider._optional_decimal(parts[4], field_name="prev_close")
+            if last_price is None or last_price <= 0:
+                return None
+            if prev_close is not None and prev_close <= 0:
+                prev_close = None
+        except (TypeError, ValueError):
+            return None
+        try:
+            change_pct = EastmoneyQuoteProvider._optional_decimal(parts[32], field_name="change_pct")
+        except (TypeError, ValueError):
+            change_pct = None
+        source_time = self._parse_source_time(parts[30])
+        market_session = self._calendar.session_phase(source_time or fetched_at)
+        return canonical, QuoteSnapshot(
+            symbol=canonical,
+            last_price=last_price,
+            prev_close=prev_close,
+            change_pct=change_pct,
+            source_time=source_time,
+            fetched_at=fetched_at,
+            provider=self.name,
+            market_session=market_session,
+        )
+
+    def _request_batch(self, batch: Sequence[str]) -> str:
+        """批量请求腾讯美股行情文本并按 GBK 解码。"""
+        codes = [f"us{canonical.split(':', 1)[1]}" for canonical in batch]
+        request = Request(
+            f"{self._endpoint}{','.join(codes)}",
+            headers={
+                "Accept": "*/*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://gu.qq.com/",
+            },
+        )
+        body = self._transport(request, float(self.timeout_seconds))
+        if len(body) > self._max_response_bytes:
+            raise ValueError("tencent us response exceeds size limit")
+        return body.decode("gbk", errors="ignore") if isinstance(body, bytes) else str(body)
+
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """批量获取美股及美股 ETF 实时行情快照。"""
+        requested: list[str] = []
+        seen: set[str] = set()
+        for value in symbols:
+            canonical = canonical_symbol(value)
+            if canonical in seen or not self.supports_symbol(canonical):
+                continue
+            seen.add(canonical)
+            requested.append(canonical)
+        if not requested:
+            return {}
+        if len(requested) > self.max_symbols:
+            raise ValueError("tencent us quote request exceeds cumulative symbol limit")
+
+        result: dict[str, QuoteSnapshot] = {}
+        batch_error: Exception | None = None
+        for offset in range(0, len(requested), self.max_batch_size):
+            batch = requested[offset : offset + self.max_batch_size]
+            try:
+                text = self._request_batch(batch)
+            except Exception as exc:
+                batch_error = exc
+                continue
+            fetched_at = self._now()
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=UTC)
+            canonical_by_code = {canonical.split(":", 1)[1]: canonical for canonical in batch}
+            for line in text.splitlines():
+                parsed = self._parse_line(
+                    line,
+                    canonical_by_code=canonical_by_code,
+                    fetched_at=fetched_at,
+                )
+                if parsed is not None:
+                    result[parsed[0]] = parsed[1]
+        if batch_error is not None and not result:
+            raise batch_error
+        return result
+
+    def health(self) -> ProviderHealth:
+        """报告腾讯美股行情源已完成配置，不在健康检查时访问公网。"""
+        return ProviderHealth(
+            provider=self.name,
+            healthy=True,
+            message="腾讯美股行情源已配置，连通性在刷新时检查",
+        )
+
+
+class FallbackUSQuoteProvider:
+    """美股多源容错适配器：优先腾讯批量行情，缺失或失败时回退东方财富美股源。"""
+
+    name = "us-fallback"
+
+    def __init__(
+        self,
+        primary: QuoteProvider,
+        secondary: QuoteProvider,
+    ) -> None:
+        """保存主/备美股行情源。"""
+        self.primary = primary
+        self.secondary = secondary
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """主源或备源任一支持该美股代码即返回 True。"""
+        return CompositeQuoteProvider._supports(self.primary, symbol) or CompositeQuoteProvider._supports(
+            self.secondary, symbol
+        )
+
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """优先从主源批量获取，并对缺失标的自动回退备源补齐。"""
+        requested = [canonical_symbol(symbol) for symbol in symbols if self.supports_symbol(symbol)]
+        if not requested:
+            return {}
+        result: dict[str, QuoteSnapshot] = {}
+        primary_error: Exception | None = None
+        try:
+            result.update(self.primary.get_quotes(requested))
+        except Exception as exc:
+            primary_error = exc
+        missing = [symbol for symbol in requested if symbol not in result]
+        if missing:
+            try:
+                result.update(self.secondary.get_quotes(missing))
+            except Exception as exc:
+                if not result:
+                    raise (primary_error or exc)
+        return result
+
+    def health(self) -> ProviderHealth:
+        """主源健康即返回健康状态，否则回退备源健康检查。"""
+        primary_health = self.primary.health()
+        if primary_health.healthy:
+            return primary_health
+        return self.secondary.health()
 
 
 class EastmoneyFundQuoteProvider:

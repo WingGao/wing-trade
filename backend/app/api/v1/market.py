@@ -103,6 +103,7 @@ async def read_intraday(
             "fetchedAt": quote.fetched_at.isoformat(),
             "provider": quote.provider,
             "isStale": quote.is_stale or snapshot.is_stale,
+            "marketSession": quote.market_session,
         }
         if quote
         else None,

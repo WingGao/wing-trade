@@ -175,13 +175,14 @@ def test_composite_quote_provider_routes_stocks_and_funds_independently() -> Non
 
 
 def test_factory_eastmoney_supports_ashare_and_open_fund_offline_health(monkeypatch) -> None:
-    """默认 eastmoney 工厂同时支持 A 股与场外基金，且健康检查不联网。"""
+    """默认 eastmoney 工厂同时支持 A 股、美股与场外基金，且健康检查不联网。"""
     monkeypatch.setenv("QUOTE_PROVIDER", "eastmoney")
     provider = create_quote_provider(Settings.from_env())
     assert isinstance(provider, CompositeQuoteProvider)
     assert provider.supports_symbol("SH:600519") is True
     assert provider.supports_symbol("OF:005827") is True
-    assert provider.supports_symbol("US:AAPL") is False
+    assert provider.supports_symbol("US:AAPL") is True
+    assert provider.supports_symbol("HK:00700") is False
     assert provider.health().healthy is True
 
 

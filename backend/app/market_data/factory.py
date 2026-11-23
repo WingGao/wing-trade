@@ -10,8 +10,11 @@ from .provider import (
     CompositeQuoteProvider,
     EastmoneyFundQuoteProvider,
     EastmoneyQuoteProvider,
+    EastmoneyUSQuoteProvider,
+    FallbackUSQuoteProvider,
     MockQuoteProvider,
     QuoteProvider,
+    TencentUSQuoteProvider,
 )
 
 
@@ -30,6 +33,16 @@ def create_quote_provider(
                 EastmoneyQuoteProvider(
                     timeout_seconds=configured.quote_timeout_seconds,
                     transport=transport,
+                ),
+                FallbackUSQuoteProvider(
+                    TencentUSQuoteProvider(
+                        timeout_seconds=configured.quote_timeout_seconds,
+                        transport=transport,
+                    ),
+                    EastmoneyUSQuoteProvider(
+                        timeout_seconds=configured.quote_timeout_seconds,
+                        transport=transport,
+                    ),
                 ),
                 EastmoneyFundQuoteProvider(
                     timeout_seconds=configured.quote_timeout_seconds,

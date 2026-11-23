@@ -18,7 +18,9 @@ from .provider import (
     EastmoneyFundQuoteProvider,
     EastmoneyQuoteProvider,
     QuoteSnapshot,
+    USMarketResolver,
     canonical_symbol,
+    shared_us_market_resolver,
 )
 
 
@@ -61,6 +63,7 @@ class SecurityInfoProvider:
     _search_url = "https://searchapi.eastmoney.com/api/suggest/get"
     _trends_url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
     _fund_nav_url = "https://api.fund.eastmoney.com/f10/lsjz"
+    _tencent_us_minute_url = "https://web.ifzq.gtimg.cn/appstock/app/usMinute/query"
     _max_response_bytes = 2 * 1024 * 1024
 
     def __init__(
@@ -69,8 +72,9 @@ class SecurityInfoProvider:
         transport: Callable[[Request, float], bytes] | None = None,
         now: Callable[[], datetime] | None = None,
         timeout_seconds: int = 5,
+        us_resolver: USMarketResolver | None = None,
     ) -> None:
-        """复用已有有界 HTTP 传输，允许离线注入数据源和时钟。"""
+        """复用已有有界 HTTP 传输，允许离线注入数据源、时钟与美股市场码解析器。"""
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._transport = transport or EastmoneyQuoteProvider()._default_transport
@@ -80,6 +84,15 @@ class SecurityInfoProvider:
         self.us_calendar = USTradingCalendar()
         self.fund_calendar = OpenFundCalendar()
         self._us_markets: OrderedDict[str, str] = OrderedDict()
+        self._us_resolver = (
+            us_resolver
+            if us_resolver is not None
+            else (
+                USMarketResolver(transport=transport, timeout_seconds=timeout_seconds)
+                if transport is not None
+                else shared_us_market_resolver()
+            )
+        )
 
     def now(self) -> datetime:
         """返回规范 UTC 时间，保证缓存和日期判断使用同一时钟。"""
@@ -190,6 +203,7 @@ class SecurityInfoProvider:
                 self._us_markets.move_to_end(code)
                 while len(self._us_markets) > 128:
                     self._us_markets.popitem(last=False)
+                self._us_resolver.remember(code, upstream_market)
             result[(market, code)] = SecurityCandidate(market, code, name, security_type)
         return list(result.values())
 
@@ -268,8 +282,95 @@ class SecurityInfoProvider:
             series_kind="nav",
         )
 
+    def _us_intraday_tencent(self, canonical: str, code: str) -> IntradaySnapshot:
+        """从腾讯美股分时接口读取当日真实分钟序列与最新报价，作为东财断连时的稳定回退。"""
+        now = self.now()
+        calendar = self.us_calendar
+        today = now.astimezone(calendar.timezone).date()
+        payload = self._request(
+            self._tencent_us_minute_url,
+            {"code": f"us{code}"},
+            referer="https://gu.qq.com/",
+        )
+        data_map = payload.get("data")
+        if not isinstance(data_map, Mapping):
+            raise ValueError("腾讯美股分时响应缺少 data 字段")
+        entry = data_map.get(f"us{code}")
+        if not isinstance(entry, Mapping):
+            raise ValueError("今日暂无该美股分时行情")
+        minute_block = entry.get("data")
+        if not isinstance(minute_block, Mapping):
+            raise ValueError("腾讯美股分时格式无效")
+        raw_date = str(minute_block.get("date") or "").strip()
+        try:
+            series_date = datetime.strptime(raw_date[:8], "%Y%m%d").date()
+        except ValueError as exc:
+            raise ValueError("腾讯美股分时缺少有效交易日期") from exc
+        if series_date != today:
+            raise ValueError("今日暂无日内行情，未将历史交易日伪装为今日")
+        rows = minute_block.get("data")
+        if not isinstance(rows, list):
+            raise ValueError("腾讯美股分时点列表无效")
+        by_time: dict[datetime, IntradayPoint] = {}
+        for row in rows:
+            if not isinstance(row, str):
+                continue
+            parts = row.split()
+            if len(parts) < 2 or len(parts[0]) != 4 or not parts[0].isdigit():
+                continue
+            try:
+                hour = int(parts[0][:2])
+                minute = int(parts[0][2:4])
+                point_local = datetime.combine(
+                    series_date, time(hour, minute), tzinfo=calendar.timezone
+                )
+                price = round_price(ensure_decimal(parts[1], field="intraday.price"))
+            except (TypeError, ValueError):
+                continue
+            if price <= 0 or point_local > now.astimezone(calendar.timezone):
+                continue
+            utc_time = point_local.astimezone(UTC)
+            by_time[utc_time] = IntradayPoint(utc_time, price)
+        points = tuple(by_time[t] for t in sorted(by_time))
+        if not points:
+            raise ValueError("今日暂无日内行情，未将历史交易日伪装为今日")
+        prev_close: Decimal | None = None
+        qt_block = entry.get("qt")
+        if isinstance(qt_block, Mapping):
+            qt_row = qt_block.get(f"us{code}")
+            if isinstance(qt_row, list) and len(qt_row) > 4:
+                try:
+                    parsed_prev = EastmoneyQuoteProvider._optional_decimal(
+                        qt_row[4], field_name="prev_close"
+                    )
+                    if parsed_prev is not None and parsed_prev > 0:
+                        prev_close = parsed_prev
+                except (TypeError, ValueError):
+                    prev_close = None
+        stale = calendar.is_session_open(now) and now - points[-1].time > timedelta(minutes=2)
+        quote = QuoteSnapshot(
+            symbol=canonical,
+            last_price=points[-1].price,
+            prev_close=prev_close,
+            source_time=points[-1].time,
+            fetched_at=now,
+            provider="tencent-us-intraday",
+            is_stale=stale,
+            market_session=calendar.session_phase(points[-1].time),
+        )
+        return IntradaySnapshot(
+            symbol=canonical,
+            trading_date=today.isoformat(),
+            points=points,
+            quote=quote,
+            fetched_at=now,
+            provider="tencent-us-intraday",
+            is_stale=stale,
+            error="行情源暂未更新，显示当日历史参考" if stale else None,
+        )
+
     def intraday(self, symbol: str) -> IntradaySnapshot:
-        """读取单日真实分钟序列，场外基金自动返回近期已公布单位净值曲线。"""
+        """读取单日真实分钟序列，场外基金返回近期净值曲线，美股东财失败时自动回退腾讯分时。"""
         canonical = canonical_symbol(symbol)
         if ":" not in canonical:
             raise ValueError("日内行情需要完整市场代码")
@@ -277,11 +378,27 @@ class SecurityInfoProvider:
         if market == "OF":
             return self.fund_nav_history(canonical)
         if market == "US":
-            if code not in self._us_markets:
+            try:
+                return self._intraday_eastmoney(canonical, market, code)
+            except Exception:
+                return self._us_intraday_tencent(canonical, code)
+        return self._intraday_eastmoney(canonical, market, code)
+
+    def _intraday_eastmoney(self, canonical: str, market: str, code: str) -> IntradaySnapshot:
+        """通过东方财富分时接口读取沪深北或美股当日分钟序列。"""
+        if market == "US":
+            upstream_market = self._us_markets.get(code) or self._us_resolver.get_cached(code)
+            if upstream_market is None:
                 self.search(canonical)
-            upstream_market = self._us_markets.get(code)
+                upstream_market = self._us_markets.get(code) or self._us_resolver.resolve(
+                    code,
+                    transport=self._transport,
+                    timeout_seconds=float(self.timeout_seconds),
+                )
             if upstream_market is None:
                 raise ValueError("未能查到该美股对应的行情市场")
+            self._us_markets[code] = upstream_market
+            self._us_resolver.remember(code, upstream_market)
         elif EastmoneyQuoteProvider().supports_symbol(canonical):
             upstream_market = "1" if market == "SH" else "0"
         else:
@@ -296,7 +413,7 @@ class SecurityInfoProvider:
                 "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
                 "ndays": "1",
-                "iscr": "0",
+                "iscr": "1" if market == "US" else "0",
             },
         )
         data = payload.get("data")
@@ -350,6 +467,7 @@ class SecurityInfoProvider:
             fetched_at=now,
             provider="eastmoney-intraday",
             is_stale=stale,
+            market_session=calendar.session_phase(points[-1].time),
         )
         return IntradaySnapshot(
             symbol=canonical,
