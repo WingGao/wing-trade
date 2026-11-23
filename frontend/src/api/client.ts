@@ -54,7 +54,7 @@ export const api = {
   accounts: () => request<Account[]>('/accounts'),
   createAccount: (payload: Record<string, unknown>) => request<Account>('/accounts', { method: 'POST', body: JSON.stringify(payload) }),
   positions: (includeClosed = false) => request<Position[]>(`/positions?${query({ includeClosed })}`),
-  summary: () => request<AnalyticsSummary>(`/analytics/summary`),
+  summary: (accountId?: string) => request<AnalyticsSummary>(`/analytics/summary?${query({ accountId })}`),
   /** 读取同时包含账务、行情和估值的一致性首页快照。 */
   dashboard: (accountId?: string, includeClosed = false, mode: DashboardMode = 'auto') => request<DashboardRead>(`/dashboard?${query({ accountId, includeClosed, mode })}`),
   quotes: (symbols?: string[], refresh = false) => request<{ quotes: Quote[] }>(`/quotes?${query({ symbols: symbols?.join(','), refresh })}`),
@@ -72,10 +72,10 @@ export const api = {
   profitSetting: (securityId?: string) => request<ProfitSetting | null>(securityId ? `/securities/${securityId}/profit-settings` : '/profit-settings'),
   /** 保存本层止盈设置，空收益率表示清除本层覆盖。 */
   saveProfitSetting: (payload: { targetReturnPct: string | null; calculationBasis: 'NET' | 'GROSS'; alertEnabled: boolean }, securityId?: string) => request<ProfitSetting | null>(securityId ? `/securities/${securityId}/profit-settings` : '/profit-settings', { method: 'PUT', body: JSON.stringify(payload) }),
-  trades: () => request<Trade[]>('/trades'),
+  trades: (accountId?: string) => request<Trade[]>(`/trades?${query({ accountId })}`),
   /** 按原版本更正成交字段，不直接替换派生持仓。 */
   updateTrade: (id: string, payload: TradeUpdate) => request<TradeUpdateRead>(`/trades/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  cycles: (securityId?: string) => request<unknown[]>(`/cycles?${query({ securityId, includeClosed: true })}`),
+  cycles: (securityId?: string, accountId?: string) => request<unknown[]>(`/cycles?${query({ securityId, accountId, includeClosed: true })}`),
   previewSell: (payload: Record<string, unknown>) => request<SellPreview>('/trades/sell/preview', { method: 'POST', body: JSON.stringify(payload) }),
   buy: (payload: Record<string, unknown>) => request<Trade>('/trades/buy', { method: 'POST', body: JSON.stringify(payload) }),
   sell: (payload: Record<string, unknown>) => request<Trade>('/trades/sell', { method: 'POST', body: JSON.stringify(payload) }),

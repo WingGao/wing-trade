@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { Account, Currency, DashboardMode, DashboardPosition, Lot, PositionRefreshScope, Security, SecurityCandidate, ValuationStatus } from '../api/types'
+import type { Currency, DashboardMode, DashboardPosition, Lot, PositionRefreshScope, Security, SecurityCandidate, ValuationStatus } from '../api/types'
+import { useAccountsStore } from '../stores/accounts'
 import { useLedgerStore } from '../stores/ledger'
 import { usePreferencesStore } from '../stores/preferences'
 import { api } from '../api/client'
@@ -10,10 +11,11 @@ import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
-import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, isFundSecurity, priceDigits, quantityUnit, trendClass, valuationStatusLabel } from '../utils/format'
+import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, isFundSecurity, marketSessionLabel, priceDigits, quantityUnit, trendClass, valuationStatusLabel } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
 import { useViewport } from '../utils/viewport'
 
+const accountsStore = useAccountsStore()
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
 const router = useRouter()
@@ -21,7 +23,13 @@ const { isMobile } = useViewport()
 const positions = computed(() => ledger.positions)
 const positionSortOrder = ref<'ascending' | 'descending'>('descending')
 const dashboard = computed(() => ledger.dashboard)
-const dashboardCurrency = computed<Currency | null>(() => dashboard.value?.currency ?? null)
+const dashboardCurrency = computed<Currency | null>(() => dashboard.value?.currency ?? accountsStore.activeAccount?.currency ?? null)
+const marketSessionText = computed(() => {
+  const phase = dashboard.value?.marketSession
+  if (!phase) return ''
+  const prefix = dashboardCurrency.value === 'USD' ? '美股' : 'A股'
+  return `${prefix}${marketSessionLabel(phase)}`
+})
 const securityKeyword = ref('')
 const securityResults = ref<SecurityCandidate[]>([])
 const searching = ref(false)
@@ -30,7 +38,7 @@ const searched = ref(false)
 const globalTargetVisible = ref(false)
 const selectedSecurity = ref<Security | null>(null)
 const selectedLots = ref<Lot[]>([])
-const accounts = ref<Account[]>([])
+const accounts = computed(() => accountsStore.accounts)
 const selectedAccountId = ref('')
 const marketChoice = ref<'CN' | 'US' | 'OF'>('CN')
 const securityName = ref('')
@@ -169,12 +177,11 @@ const unrealizedRate = computed(() => {
   return `收益率 ${formatPercent(dashboard.value?.summary.unrealizedReturnPct)}`
 })
 
-/** 加载账户列表并保留当前账户选择。 */
+/** 加载账户列表并同步全局当前账户到快速记账选择器。 */
 async function loadAccounts() {
   try {
-    const result = await api.accounts()
-    accounts.value = result
-    if (!selectedAccountId.value) selectedAccountId.value = result.find((account) => account.currency === 'CNY')?.id ?? result[0]?.id ?? ''
+    const result = await accountsStore.loadAccounts()
+    if (!selectedAccountId.value) selectedAccountId.value = accountsStore.activeAccountId || result[0]?.id || ''
   } catch (cause) {
     ElMessage.error(cause instanceof Error ? cause.message : '加载账户失败')
   }
@@ -204,7 +211,7 @@ async function loadValuation(mode: DashboardMode, reportSuccess = false, schedul
   const requestId = ++responseGeneration
   clearPollTimer()
   const result = await ledger.loadDashboard({
-    accountId: dashboard.value?.accountId,
+    accountId: accountsStore.activeAccountId || dashboard.value?.accountId,
     includeClosed: preferences.includeClosed,
     mode,
     reuse: mode === 'auto' && !afterWrite,
@@ -300,12 +307,11 @@ async function chooseSecurity(candidate: SecurityCandidate) {
   }
 }
 
-/** 创建当前证券币种对应的账户，并刷新批次列表。 */
+/** 创建当前证券币种对应的账户，并同步切换全局账户与刷新批次列表。 */
 async function createAccountForCurrency(currency: 'CNY' | 'USD') {
   try {
-    const result = await ElMessageBox.prompt(`请输入 ${currency} 账户名称`, `创建 ${currency} 账户`, { inputValue: currency === 'USD' ? 'US Trading' : 'A股 Trading' })
-    const account = await api.createAccount({ name: result.value, currency })
-    accounts.value.push(account)
+    const result = await ElMessageBox.prompt(`请输入 ${currency} 账户名称`, `创建 ${currency} 账户`, { inputValue: currency === 'USD' ? '美股账户' : 'A股账户' })
+    const account = await accountsStore.createAccount({ name: result.value, currency })
     selectedAccountId.value = account.id
     ElMessage.success(`${currency} 账户已创建`)
     if (selectedSecurity.value) selectedLots.value = (await api.lots(selectedSecurity.value.id, false, account.id)).lots
@@ -367,11 +373,21 @@ async function recalculate(scope: PositionRefreshScope) {
   })
 }
 
-/** 首次进入先显示缓存，再请求自动估值，并注册页面生命周期。 */
+/** 首次进入先加载账户并显示缓存，再请求自动估值。 */
 async function initializePage() {
+  await loadAccounts()
   await loadValuation('cache', false, false)
   if (!document.hidden) await loadValuation('auto')
 }
+
+watch(() => accountsStore.activeAccountId, (nextAccountId) => {
+  if (!nextAccountId) return
+  if (!selectedSecurity.value) selectedAccountId.value = nextAccountId
+  if (!pageAlive.value || nextAccountId === dashboard.value?.accountId) return
+  queryGeneration += 1
+  ledger.invalidateDashboard()
+  void loadValuation('auto')
+})
 
 watch(() => preferences.includeClosed, () => {
   queryGeneration += 1
@@ -387,7 +403,6 @@ watch(() => preferences.includeClosed, () => {
 onMounted(() => {
   pageAlive.value = true
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  void loadAccounts()
   void initializePage()
 })
 
@@ -405,6 +420,7 @@ onBeforeUnmount(() => {
   <section class="page-head">
     <div><h2>账户总览</h2><p class="muted">以真实交易流水为准，价格、浮盈和汇总来自同一次估值响应。</p></div>
     <div class="toolbar">
+      <el-tag v-if="marketSessionText" :type="dashboard?.marketSessionOpen ? 'success' : 'info'" effect="plain">{{ marketSessionText }}</el-tag>
       <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
       <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
       <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
@@ -466,7 +482,7 @@ onBeforeUnmount(() => {
         <template #default="{ row }"><a class="security-link" href="#" @click.prevent="openPosition(row)"><strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong><span v-if="row.name" class="position-name">{{ row.name }}</span></a></template>
       </el-table-column>
       <el-table-column label="持仓" min-width="150">
-        <template #default="{ row }"><div class="position-holding"><strong class="position-quantity">{{ formatQuantity(row.remainingQty, isFundSecurity(row)) }} {{ quantityUnit(row) }}</strong><span class="position-cost">加权成本 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</span></div></template>
+        <template #default="{ row }"><div class="position-holding"><strong class="position-quantity">{{ formatQuantity(row.remainingQty, row) }} {{ quantityUnit(row) }}</strong><span class="position-cost">加权成本 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</span></div></template>
       </el-table-column>
       <el-table-column prop="quote.changePct" label="当前总价值" min-width="220" sortable="custom" :sort-orders="['descending', 'ascending']"><template #default="{ row }"><QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact /></template></el-table-column>
       <el-table-column label="持仓浮盈" min-width="135">
@@ -476,7 +492,7 @@ onBeforeUnmount(() => {
         <template #default="{ row }">
           <div v-if="row.lowestPriceGroup" class="lowest-group">
             <div>共同买入价 <strong>{{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</strong></div>
-            <div class="lowest-group-meta"><span>{{ row.lowestPriceGroup.lotCount }}批</span><span>{{ formatQuantity(row.lowestPriceGroup.remainingQty, isFundSecurity(row)) }}{{ quantityUnit(row) }}</span><span>{{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}</span></div>
+            <div class="lowest-group-meta"><span>{{ row.lowestPriceGroup.lotCount }}批</span><span>{{ formatQuantity(row.lowestPriceGroup.remainingQty, row) }}{{ quantityUnit(row) }}</span><span>{{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}</span></div>
             <div :class="['group-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">组浮盈 {{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</div>
           </div>
           <span v-else class="muted">无符合条件的未结清批次</span>
@@ -605,7 +621,7 @@ onBeforeUnmount(() => {
                 <strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong>
                 <span v-if="row.name" class="m-pos-name">{{ row.name }}</span>
               </a>
-              <div class="m-pos-holding num">{{ formatQuantity(row.remainingQty, isFundSecurity(row)) }}{{ quantityUnit(row) }} · 均 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</div>
+              <div class="m-pos-holding num">{{ formatQuantity(row.remainingQty, row) }}{{ quantityUnit(row) }} · 均 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</div>
             </div>
             <div class="m-pos-col-quote">
               <QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact />
@@ -618,7 +634,7 @@ onBeforeUnmount(() => {
           <div class="m-pos-foot">
             <div class="m-pos-lowest num">
               <template v-if="row.lowestPriceGroup">
-                最低批 {{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }} · {{ row.lowestPriceGroup.lotCount }}批 {{ formatQuantity(row.lowestPriceGroup.remainingQty, isFundSecurity(row)) }}{{ quantityUnit(row) }} {{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}
+                最低批 {{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }} · {{ row.lowestPriceGroup.lotCount }}批 {{ formatQuantity(row.lowestPriceGroup.remainingQty, row) }}{{ quantityUnit(row) }} {{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}
               </template>
               <span v-else class="m-section-sub">无最低批</span>
             </div>

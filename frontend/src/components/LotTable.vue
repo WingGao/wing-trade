@@ -7,6 +7,7 @@ import { useViewport } from '../utils/viewport'
 const props = defineProps<{ lots: Lot[]; includeClosed: boolean; currency?: Currency | null; isFund?: boolean; quote?: Quote | null }>()
 const emit = defineEmits<{ setTarget: [lot: Lot] }>()
 const { isMobile } = useViewport()
+const qtyTarget = computed(() => ({ currency: props.currency, securityType: props.isFund ? 'FUND' : 'STOCK' }))
 const sortedLots = computed(() => [...props.lots].sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime() || b.id.localeCompare(a.id)))
 
 /** 返回批次当前成本总价：持有中展示剩余成本，已结清展示初始总成本。 */
@@ -31,15 +32,15 @@ function formatTargets(lot: Lot): string {
   const digits = priceDigits(props.isFund, 3)
   const unit = quantityUnit(props.isFund)
   return (lot.targets ?? []).filter((target) => !['CANCELLED', 'COMPLETED'].includes(target.status))
-    .map((target) => `${formatMoney(target.targetPriceEstimate, props.currency, digits)} / ${formatTargetPercent(target.targetReturnPct)} · ${formatQuantity(target.plannedSellQty, props.isFund)} ${unit}${target.status === 'TRIGGERED' ? '（已触发）' : target.status === 'CONFLICT' ? '（计划量冲突）' : ''}`).join(' · ')
+    .map((target) => `${formatMoney(target.targetPriceEstimate, props.currency, digits)} / ${formatTargetPercent(target.targetReturnPct)} · ${formatQuantity(target.plannedSellQty, qtyTarget.value)} ${unit}${target.status === 'TRIGGERED' ? '（已触发）' : target.status === 'CONFLICT' ? '（计划量冲突）' : ''}`).join(' · ')
 }
 </script>
 <template>
   <el-table v-if="!isMobile" :data="sortedLots" row-key="id" stripe empty-text="暂无批次" class="lot-table">
     <el-table-column label="批次 ID" min-width="110"><template #default="{ row }"><span class="lot-code" :title="row.id">{{ row.id.slice(0, 8) }}</span></template></el-table-column>
     <el-table-column label="买入日期" min-width="170"><template #default="{ row }">{{ formatDateTime(row.executedAt) }}</template></el-table-column>
-    <el-table-column :label="isFund ? '初始份额' : '初始股数'" min-width="95"><template #default="{ row }">{{ formatQuantity(row.originalQty, isFund) }}</template></el-table-column>
-    <el-table-column :label="isFund ? '剩余份额' : '剩余股数'" min-width="95"><template #default="{ row }">{{ formatQuantity(row.remainingQty, isFund) }}</template></el-table-column>
+    <el-table-column :label="isFund ? '初始份额' : '初始股数'" min-width="95"><template #default="{ row }">{{ formatQuantity(row.originalQty, qtyTarget) }}</template></el-table-column>
+    <el-table-column :label="isFund ? '剩余份额' : '剩余股数'" min-width="95"><template #default="{ row }">{{ formatQuantity(row.remainingQty, qtyTarget) }}</template></el-table-column>
     <el-table-column label="含费单位成本" min-width="120"><template #default="{ row }">{{ formatMoney(row.unitCost, currency, priceDigits(isFund, 3)) }}</template></el-table-column>
     <el-table-column label="成本总价" min-width="125"><template #default="{ row }"><div>{{ formatMoney(lotCostTotal(row), currency) }}</div><div v-if="row.status === 'OPEN' && row.remainingCost !== row.originalCost" class="muted">初始 {{ formatMoney(row.originalCost, currency) }}</div></template></el-table-column>
     <el-table-column :label="isFund ? '现值 / 净值' : '现值 / 现价'" min-width="135"><template #default="{ row }"><template v-if="row.status === 'OPEN' && lotMarketValue(row) !== null"><div>{{ formatMoney(lotMarketValue(row), currency) }}</div><div class="muted">{{ isFund ? '净值' : '现价' }} {{ formatMoney(quote?.lastPrice, currency, priceDigits(isFund, 3)) }}</div></template><span v-else class="muted">—</span></template></el-table-column>
@@ -61,7 +62,7 @@ function formatTargets(lot: Lot): string {
       <div class="m-lot-grid">
         <div class="m-lot-cell">
           <span class="m-lot-label">剩余 / 初始</span>
-          <strong class="m-lot-val num">{{ formatQuantity(row.remainingQty, isFund) }} / {{ formatQuantity(row.originalQty, isFund) }}</strong>
+          <strong class="m-lot-val num">{{ formatQuantity(row.remainingQty, qtyTarget) }} / {{ formatQuantity(row.originalQty, qtyTarget) }}</strong>
           <span class="m-lot-sub num">单价 {{ formatMoney(row.unitCost, currency, priceDigits(isFund, 3)) }}</span>
         </div>
         <div class="m-lot-cell">

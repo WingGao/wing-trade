@@ -6,6 +6,7 @@ import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{ details: SettledTradeDetail[]; currency: Currency; isFund?: boolean }>()
 const { isMobile } = useViewport()
+const qtyTarget = computed(() => ({ currency: props.currency, securityType: props.isFund ? 'FUND' : 'STOCK' }))
 
 /** 仅排序服务端已结清成交投影，不重新计算数量、现金或盈亏。 */
 const sortedDetails = computed(() => [...props.details].sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime() || b.tradeId.localeCompare(a.tradeId) || b.lotId.localeCompare(a.lotId)))
@@ -22,7 +23,7 @@ function detailKey(detail: SettledTradeDetail): string {
     <el-table-column label="方向" min-width="78"><template #default="{ row }"><el-tag :type="row.side === 'BUY' ? 'danger' : 'success'" :title="`交易 ID：${row.tradeId}`">{{ row.side === 'BUY' ? '买入' : '卖出' }}</el-tag></template></el-table-column>
     <el-table-column label="成交时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.executedAt) }}</template></el-table-column>
     <el-table-column :label="isFund ? '原始净值' : '原始成交价'" min-width="120"><template #default="{ row }">{{ formatMoney(row.price, currency, priceDigits(isFund, 3)) }}</template></el-table-column>
-    <el-table-column label="本批数量" min-width="150"><template #default="{ row }"><strong>{{ formatQuantity(row.qty, isFund) }}</strong><div v-if="row.side === 'SELL'" class="muted">整笔成交 {{ formatQuantity(row.originalTradeQty, isFund) }} {{ quantityUnit(isFund) }}</div></template></el-table-column>
+    <el-table-column label="本批数量" min-width="150"><template #default="{ row }"><strong>{{ formatQuantity(row.qty, qtyTarget) }}</strong><div v-if="row.side === 'SELL'" class="muted">整笔成交 {{ formatQuantity(row.originalTradeQty, qtyTarget) }} {{ quantityUnit(isFund) }}</div></template></el-table-column>
     <el-table-column label="含费买入 / 卖出净回款" min-width="185"><template #default="{ row }">{{ formatMoney(row.cashAmount, currency) }}<div class="muted">{{ row.side === 'BUY' ? '含费买入金额' : '本批分摊净回款' }}</div></template></el-table-column>
     <el-table-column label="已实现盈亏" min-width="130"><template #default="{ row }"><span v-if="row.side === 'SELL'" :class="trendClass(row.realizedPnl)">{{ formatMoney(row.realizedPnl, currency) }}</span><span v-else class="muted">—</span></template></el-table-column>
   </el-table>
@@ -37,8 +38,8 @@ function detailKey(detail: SettledTradeDetail): string {
       <div class="m-settled-grid">
         <div class="m-settled-cell">
           <span class="m-settled-label">{{ isFund ? '净值 / 本批' : '成交价 / 本批' }}</span>
-          <strong class="m-settled-val num">{{ formatMoney(row.price, currency, priceDigits(isFund, 3)) }} × {{ formatQuantity(row.qty, isFund) }}</strong>
-          <span v-if="row.side === 'SELL'" class="m-settled-sub num">整笔 {{ formatQuantity(row.originalTradeQty, isFund) }} {{ quantityUnit(isFund) }}</span>
+          <strong class="m-settled-val num">{{ formatMoney(row.price, currency, priceDigits(isFund, 3)) }} × {{ formatQuantity(row.qty, qtyTarget) }}</strong>
+          <span v-if="row.side === 'SELL'" class="m-settled-sub num">整笔 {{ formatQuantity(row.originalTradeQty, qtyTarget) }} {{ quantityUnit(isFund) }}</span>
         </div>
         <div class="m-settled-cell">
           <span class="m-settled-label">{{ row.side === 'BUY' ? '含费买入' : '分摊净回款' }}</span>

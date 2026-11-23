@@ -34,6 +34,8 @@ export type MatchingMethod = 'FIFO' | 'LIFO' | 'EQUAL' | 'MANUAL'
 
 export type DashboardMode = 'cache' | 'auto' | 'manual'
 
+export type MarketSessionPhase = 'pre' | 'regular' | 'post' | 'closed'
+
 export type ValuationStatus = 'fresh' | 'stale' | 'partial' | 'unavailable' | 'empty'
 
 export interface Account {
@@ -95,6 +97,7 @@ export interface Quote {
   isStale: boolean
   market?: string | null
   currency?: Currency | null
+  marketSession?: MarketSessionPhase | null
 }
 
 export interface Position {
@@ -281,6 +284,7 @@ export interface DashboardRead {
   currency: Currency
   asOf: string
   marketSessionOpen: boolean
+  marketSession?: MarketSessionPhase
   pollAfterSeconds: number
   positions: DashboardPosition[]
   summary: DashboardSummary

@@ -12,6 +12,8 @@ interface PreviewInput {
   qty: string
   price: string
   executedAt: string
+  commission: string
+  otherFee: string
   key: string
 }
 
@@ -19,7 +21,9 @@ const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string;
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
 const { isMobile } = useViewport()
-const form = reactive({ qty: '', price: '', executedAt: new Date().toISOString().slice(0, 16) })
+const isUS = computed(() => props.currency === 'USD')
+const allowDecimalQty = computed(() => Boolean(props.isFund) || isUS.value)
+const form = reactive({ qty: '', price: '', executedAt: new Date().toISOString().slice(0, 16), commission: '', otherFee: '' })
 const preview = ref<SellPreview | null>(null)
 const previewInput = ref<PreviewInput | null>(null)
 const loading = ref(false)
@@ -41,8 +45,10 @@ function buildPreviewInput(): PreviewInput {
     qty: form.qty.trim(),
     price: form.price.trim(),
     executedAt: executedAtIso(),
+    commission: form.commission.trim() || '0',
+    otherFee: form.otherFee.trim() || '0',
   }
-  return { ...input, key: JSON.stringify([input.accountId ?? '', input.securityId, input.qty, input.price, input.executedAt]) }
+  return { ...input, key: JSON.stringify([input.accountId ?? '', input.securityId, input.qty, input.price, input.executedAt, input.commission, input.otherFee]) }
 }
 
 const currentPreviewKey = computed(() => buildPreviewInput().key)
@@ -62,7 +68,7 @@ function shortLotId(lotId: string): string {
   return lotId.slice(0, 8)
 }
 
-watch(() => [props.accountId, props.securityId, form.qty, form.price, form.executedAt], invalidatePreview)
+watch(() => [props.accountId, props.securityId, form.qty, form.price, form.executedAt, form.commission, form.otherFee], invalidatePreview)
 watch(visible, (open) => { if (!open) invalidatePreview() })
 
 /** 请求最近买入优先且跨批次等量分配的预览，并丢弃已过期响应。 */
@@ -83,6 +89,8 @@ async function previewSell() {
       qty: input.qty,
       price: input.price,
       executedAt: input.executedAt,
+      commission: input.commission,
+      otherFee: input.otherFee,
       matchingMethod: 'EQUAL',
     })
     if (generation !== previewGeneration) return
@@ -110,6 +118,8 @@ async function submit() {
       qty: preview.value.qty,
       price: preview.value.price,
       executedAt: preview.value.executedAt,
+      commission: previewInput.value.commission,
+      otherFee: previewInput.value.otherFee,
       clientRequestId: crypto.randomUUID(),
       matches: preview.value.matches.map((match) => ({ lotId: match.lotId, matchedQty: match.matchedQty })),
     })
@@ -125,10 +135,12 @@ async function submit() {
 </script>
 <template>
   <el-drawer v-model="visible" :title="`卖出配对工作台（${previewCurrency ?? currency ?? '币种未知'}）`" :size="isMobile ? '100%' : 'min(760px, 96vw)'">
-    <el-form class="sell-form" :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '86px'">
-      <el-form-item :label="isFund ? '赎回份额' : '卖出数量'"><el-input v-model="form.qty" :inputmode="isFund ? 'decimal' : 'numeric'" :placeholder="isFund ? '支持小数份额' : undefined" /></el-form-item>
-      <el-form-item :label="isFund ? '单位净值' : '卖出价格'"><el-input v-model="form.price" inputmode="decimal" :placeholder="isFund ? '如 1.2345' : undefined" /></el-form-item>
+    <el-form class="sell-form" :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '96px'">
+      <el-form-item :label="isFund ? '赎回份额' : '卖出数量'"><el-input v-model="form.qty" :inputmode="allowDecimalQty ? 'decimal' : 'numeric'" :placeholder="isFund ? '支持小数份额' : isUS ? '支持碎股小数，如 0.5' : undefined" /></el-form-item>
+      <el-form-item :label="isFund ? '单位净值' : '卖出价格'"><el-input v-model="form.price" inputmode="decimal" :placeholder="isFund ? '如 1.2345' : isUS ? '美元单价，如 235.00' : undefined" /></el-form-item>
       <el-form-item label="成交时间"><el-date-picker v-model="form.executedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
+      <el-form-item :label="isFund ? '赎回费' : '佣金'"><el-input v-model="form.commission" inputmode="decimal" placeholder="默认 0" /></el-form-item>
+      <el-form-item v-if="!isFund" :label="isUS ? '平台/监管费' : '其他费用'"><el-input v-model="form.otherFee" inputmode="decimal" placeholder="默认 0" /></el-form-item>
     </el-form>
     <el-button type="primary" :loading="loading" @click="previewSell">预览最近优先等量配对</el-button>
     <p class="muted">优先最近买入批次，跨批次尽量等量扣减；容量不足或余量由服务端分配，差价计入已实现收益。</p>

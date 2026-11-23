@@ -7,7 +7,22 @@
         <h1 class="m-topbar-title">{{ pageTitle }}</h1>
       </div>
       <div v-if="auth.user" class="m-topbar-user">
-        <span class="m-user-name">{{ userShortName }}</span>
+        <el-select
+          v-if="accountsStore.accounts.length"
+          :model-value="accountsStore.activeAccountId"
+          size="small"
+          class="m-account-switcher"
+          placeholder="账户"
+          @update:model-value="handleAccountChange"
+        >
+          <el-option
+            v-for="account in accountsStore.accounts"
+            :key="account.id"
+            :label="`${account.name} (${account.currency})`"
+            :value="account.id"
+          />
+        </el-select>
+        <button type="button" class="m-add-account-btn" title="新建账户" @click="openCreateAccount">+</button>
         <button type="button" class="m-logout-btn" :disabled="loggingOut" @click="handleLogout">
           {{ loggingOut ? '退出中' : '退出' }}
         </button>
@@ -33,7 +48,7 @@
     <el-aside width="220px" class="sidebar">
       <div class="brand">
         <span class="brand-mark">翼</span>
-        <div><strong>A 股交易账本</strong><small>Portfolio Journal</small></div>
+        <div><strong>翼·交易账本</strong><small>Portfolio Journal</small></div>
       </div>
       <el-menu :default-active="route.path" router class="nav" background-color="transparent" text-color="#a7b1c2" active-text-color="#fff">
         <el-menu-item index="/dashboard">总览 Dashboard</el-menu-item>
@@ -50,6 +65,24 @@
           <h1>{{ route.path === '/dashboard' ? '总览' : '投资账本' }}</h1>
         </div>
         <div class="topbar-user" v-if="auth.user">
+          <div class="topbar-account">
+            <el-select
+              v-if="accountsStore.accounts.length"
+              :model-value="accountsStore.activeAccountId"
+              size="small"
+              style="width: 196px"
+              placeholder="选择资金账户"
+              @update:model-value="handleAccountChange"
+            >
+              <el-option
+                v-for="account in accountsStore.accounts"
+                :key="account.id"
+                :label="`${account.name} (${account.currency})`"
+                :value="account.id"
+              />
+            </el-select>
+            <el-button size="small" plain @click="openCreateAccount">+ 新建账户</el-button>
+          </div>
           <div class="user-meta">
             <span class="user-email">{{ auth.user.displayName || auth.user.email }}</span>
             <el-tag :type="auth.isAdmin ? 'danger' : 'success'" size="small" effect="dark">
@@ -62,29 +95,31 @@
       <el-main class="main"><router-view /></el-main>
     </el-container>
   </el-container>
+  <CreateAccountDialog v-if="auth.user" v-model="createAccountVisible" :default-currency="createDefaultCurrency" />
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { setUnauthorizedHandler } from './api/client'
+import type { Currency } from './api/types'
+import CreateAccountDialog from './components/CreateAccountDialog.vue'
+import { useAccountsStore } from './stores/accounts'
 import { useAuthStore } from './stores/auth'
 import { useViewport } from './utils/viewport'
 
 const auth = useAuthStore()
+const accountsStore = useAccountsStore()
 const route = useRoute()
 const router = useRouter()
 const { isMobile } = useViewport()
 const loggingOut = ref(false)
+const createAccountVisible = ref(false)
+const createDefaultCurrency = ref<Currency>('USD')
 
 const isPublicRoute = computed(() => Boolean(route.meta.public))
 /** 计算当前页面标题，供移动端极简顶栏展示。 */
 const pageTitle = computed(() => (route.path === '/dashboard' ? '总览' : String(route.meta.title ?? '投资账本')))
-/** 计算用户紧凑显示名，避免移动端顶栏溢出。 */
-const userShortName = computed(() => {
-  const raw = auth.user?.displayName || auth.user?.email || ''
-  return raw.includes('@') ? raw.split('@')[0] : raw
-})
 
 /** 判断底部导航项是否处于当前激活路由。 */
 function isNavActive(path: string): boolean {
@@ -92,20 +127,43 @@ function isNavActive(path: string): boolean {
   return route.path === path
 }
 
+/** 切换全局资金账户。 */
+function handleAccountChange(accountId: string): void {
+  accountsStore.setActiveAccount(accountId)
+}
+
+/** 打开新建资金账户弹窗，若当前尚无美元账户则默认推荐 USD。 */
+function openCreateAccount(): void {
+  const hasUsd = accountsStore.accounts.some((item) => item.currency === 'USD')
+  createDefaultCurrency.value = hasUsd ? 'CNY' : 'USD'
+  createAccountVisible.value = true
+}
+
 /** 处理主动退出登录并返回登录页。 */
 async function handleLogout(): Promise<void> {
   loggingOut.value = true
   try {
     await auth.logout()
+    accountsStore.reset()
     await router.replace('/login')
   } finally {
     loggingOut.value = false
   }
 }
 
+watch(
+  () => auth.user?.id,
+  (userId) => {
+    if (userId) void accountsStore.loadAccounts()
+    else accountsStore.reset()
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   setUnauthorizedHandler(() => {
     auth.clearAuth()
+    accountsStore.reset()
     if (router.currentRoute.value.path !== '/login') {
       void router.replace({ path: '/login', query: { redirect: router.currentRoute.value.fullPath } })
     }
@@ -116,3 +174,9 @@ onBeforeUnmount(() => {
   setUnauthorizedHandler(null)
 })
 </script>
+
+<style scoped>
+.topbar-account { display: flex; align-items: center; gap: 8px; }
+.m-account-switcher { width: 126px; }
+.m-add-account-btn { border: 1px solid #d0d7e2; background: #fff; color: #182230; border-radius: 4px; width: 24px; height: 24px; line-height: 20px; font-size: 14px; font-weight: 700; cursor: pointer; padding: 0; }
+</style>

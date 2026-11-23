@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Currency, Quote } from '../api/types'
-import { formatDateTime, formatMoney, formatSignedPercent, isFundSecurity, priceDigits, trendClass } from '../utils/format'
+import { formatDateTime, formatMoney, formatSignedPercent, isFundSecurity, marketSessionLabel, priceDigits, trendClass } from '../utils/format'
 import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{
@@ -26,23 +26,34 @@ function displayedPrice(quote: Quote): string {
   )
 }
 
-/** 返回报价状态的文字，避免仅用颜色表达过期信息。 */
+/** 返回报价状态的文字，避免仅用颜色表达过期或盘前/盘后信息。 */
 function quoteStatusLabel(quote: Quote): string {
   if (quote.lastPrice === null || quote.lastPrice === undefined) return '不可用'
   if (quote.isStale) return '已过期'
-  return isFundSecurity(quote) ? '净值' : '实时'
+  if (isFundSecurity(quote)) return '净值'
+  if (quote.marketSession === 'pre') return '盘前'
+  if (quote.marketSession === 'post') return '盘后'
+  return '实时'
 }
 
-/** 根据报价可用性和新鲜度选择状态标签样式。 */
-function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' {
+/** 根据报价可用性、新鲜度与扩展时段选择状态标签样式。 */
+function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' | 'info' {
   if (quote.lastPrice === null || quote.lastPrice === undefined) return 'danger'
-  return quote.isStale ? 'warning' : 'success'
+  if (quote.isStale) return 'warning'
+  if (quote.marketSession === 'pre' || quote.marketSession === 'post') return 'info'
+  return 'success'
 }
 
-/** 移动端紧凑模式仅在报价过期或不可用时显示状态标签，实时行情隐藏标签以提升密度。 */
+/** 移动端紧凑模式在报价过期、不可用或处于盘前/盘后扩展时段时显示标签。 */
 function showCompactStatusTag(quote: Quote): boolean {
   if (!isMobile.value) return true
-  return quote.lastPrice === null || quote.lastPrice === undefined || Boolean(quote.isStale)
+  return (
+    quote.lastPrice === null
+    || quote.lastPrice === undefined
+    || Boolean(quote.isStale)
+    || quote.marketSession === 'pre'
+    || quote.marketSession === 'post'
+  )
 }
 </script>
 
@@ -57,6 +68,7 @@ function showCompactStatusTag(quote: Quote): boolean {
         <template #content>
           <div class="quote-tooltip">
             <strong>报价更新信息</strong>
+            <span v-if="quote.marketSession">交易时段：{{ marketSessionLabel(quote.marketSession) }}</span>
             <span v-if="quote.provider">行情来源：{{ quote.provider }}</span>
             <span v-if="quote.sourceTime">报价时间：{{ formatDateTime(quote.sourceTime) }}</span>
             <span v-else>报价时间：未知</span>

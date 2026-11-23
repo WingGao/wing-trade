@@ -1,4 +1,4 @@
-import type { Currency, ValuationStatus } from '../api/types'
+import type { Currency, MarketSessionPhase, ValuationStatus } from '../api/types'
 
 const numberFormatters = new Map<string, Intl.NumberFormat>()
 
@@ -23,6 +23,27 @@ export function isFundSecurity(
   if (target.market?.toUpperCase() === 'OF') return true
   if (target.securityType?.toUpperCase() === 'FUND') return true
   return Boolean(target.symbol?.toUpperCase().startsWith('OF:'))
+}
+
+/** 判断标的或交易对象是否属于美股市场。 */
+export function isUSSecurity(
+  target?: { market?: string | null; currency?: string | null; symbol?: string | null } | null,
+): boolean {
+  if (!target) return false
+  if (target.market?.toUpperCase() === 'US') return true
+  if (target.currency?.toUpperCase() === 'USD') return true
+  return Boolean(target.symbol?.toUpperCase().startsWith('US:'))
+}
+
+/** 返回交易时段的简短中文标签，便于区分盘前、盘中与盘后。 */
+export function marketSessionLabel(phase: MarketSessionPhase | null | undefined): string {
+  switch (phase) {
+    case 'pre': return '盘前'
+    case 'post': return '盘后'
+    case 'regular': return '盘中'
+    case 'closed': return '休市'
+    default: return ''
+  }
 }
 
 /** 返回标的对应的数量展示单位（基金为“份”，股票为“股”）。 */
@@ -57,14 +78,21 @@ export function formatMoney(value: string | null | undefined, currency: Currency
   return `${symbol} ${formatted}`.trim()
 }
 
-/** 股数按整数展示，基金份额按 2 至 4 位小数展示；仅改变展示精度，不改变服务端账务值。 */
-export function formatQuantity(value: string | null | undefined, isFund = false): string {
+/** 基金份额按 2 至 4 位小数展示，美股或含小数股数保留最多 4 位有效小数，A 股整数股按整数展示。 */
+export function formatQuantity(
+  value: string | null | undefined,
+  target: { market?: string | null; securityType?: string | null; symbol?: string | null; currency?: string | null } | boolean | null = false,
+): string {
   if (value === null || value === undefined || value === '') return '—'
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return '—'
-  return isFund
-    ? getNumberFormatter(2, 4).format(parsed === 0 ? 0 : parsed)
-    : getNumberFormatter(0).format(parsed === 0 ? 0 : parsed)
+  const normalized = parsed === 0 ? 0 : parsed
+  const isFund = typeof target === 'boolean' ? target : isFundSecurity(target)
+  if (isFund) return getNumberFormatter(2, 4).format(normalized)
+  const isUS = typeof target === 'object' && target !== null && isUSSecurity(target)
+  const hasFraction = Math.abs(normalized - Math.trunc(normalized)) > 1e-9
+  if (isUS || hasFraction) return getNumberFormatter(0, 4).format(normalized)
+  return getNumberFormatter(0).format(normalized)
 }
 
 /** 以字符串移动十进制小数点，避免止盈比例转换混入浮点误差。 */
