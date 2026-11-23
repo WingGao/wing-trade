@@ -156,3 +156,34 @@ remaining_qty = sum(lot.remaining_qty for lot in selected)
 remaining_cost = sum(lot.remaining_cost for lot in selected)
 return latest_price * remaining_qty - remaining_cost
 ```
+
+---
+
+## Scenario: 场外开放式基金（OF）已公布单位净值与近期净值曲线
+
+### 1. Scope / Trigger
+
+- 触发条件：新增或修改场外开放式基金（`market="OF"`、`security_type="FUND"`）查名、已公布单位净值行情、缓存新鲜度日历或详情页近期净值曲线。
+- 场外基金复用 `CNY` 账户与 `quote_cache` 共享缓存表，但不参与股票盘中逐笔刷新。
+
+### 2. Signatures
+
+- `MARKET_CURRENCY["OF"] = "CNY"`；`is_open_fund_market(market: str | None) -> bool`
+- `OpenFundCalendar(nav_ttl_seconds=6 * 3600)`：`is_session_open()` 恒返回 `False`
+- `EastmoneyFundQuoteProvider.get_quotes(symbols: Sequence[str]) -> dict[str, QuoteSnapshot]`
+- `CompositeQuoteProvider(providers, name="eastmoney")`：按子源 `supports_symbol` 路由合并
+- `GET /api/v1/securities/lookup`：候选返回 `securityType`（`"STOCK"` / `"FUND"`）
+- `GET /api/v1/securities/{security_id}/intraday`：场外基金返回 `seriesKind="nav"` 与按日期升序排列的近期已公布单位净值点
+
+### 3. Contracts
+
+- **市场与类型**：`POST /api/v1/securities` 当 `market="OF"` 且未显式指定类型（默认 `"STOCK"`）时自动规范为 `security_type="FUND"`。
+- **查名区分场内 ETF 与场外基金**：`SecurityInfoProvider.search()` 必须先识别 `MktNum in {"0", "1"}` 的沪深北场内证券（含场内股票与场内 ETF）与美股，再将剩余 6 位数字且属于基金分类的记录归入 `OF` / `FUND`。
+- **仅采信已公布单位净值**：`EastmoneyFundQuoteProvider` 与 `SecurityInfoProvider.fund_nav_history()` 从东方财富公开接口 `https://api.fund.eastmoney.com/f10/lsjz`（带 `Referer: https://fundf10.eastmoney.com/`）读取 `DWJZ`、`FSRQ`、`JZZZL`，使用 `Decimal` 解析并跳过空值/非正数，不得使用盘中估算净值替代。
+- **独立容错与新鲜度**：`CompositeQuoteProvider` 中股票源与基金源互不阻塞，单源失败不丢弃另一源成功报价；`QuoteService` 对 `OF` 市场使用 `OpenFundCalendar`，避免盘中按分钟级把已公布净值误判过期。
+- **前端展示约定**：场外基金份额显示 2~4 位小数、单位显示“份”、净值与成本显示 4 位小数；详情页识别 `seriesKind="nav"` 后横轴按 `MM-DD` 渲染且禁用 3 秒定时轮询。
+
+### 4. Tests Required
+
+- 单元测试（`backend/tests/unit/test_open_fund_market_data.py`）：覆盖 `OF` 市场/日历、`EastmoneyFundQuoteProvider` 正常解析/缺省涨跌幅计算/无效行/部分失败/全失败/响应超限、`CompositeQuoteProvider` 混合路由与单源容错、`SecurityInfoProvider` 场内 ETF 与场外基金区分及 `fund_nav_history` 升序与 5 分钟缓存。
+- 集成测试（`backend/tests/integration/test_open_fund_api.py`）：覆盖查名、建档、小数份额与四位净值买卖配对、`seriesKind="nav"` 与 `Dashboard` 估值端到端闭环。
