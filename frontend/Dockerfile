@@ -1,6 +1,6 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY package.json ./
+COPY package.json pnpm-workspace.yaml ./
 RUN corepack enable && pnpm install --no-frozen-lockfile
 COPY . .
 RUN pnpm run build
