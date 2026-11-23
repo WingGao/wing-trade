@@ -10,7 +10,7 @@ from app.domain.enums import TargetStatus
 from app.domain.precision import round_price
 from app.models.ledger import Lot, QuoteCache, Security
 
-from .calendar import AShareTradingCalendar, USTradingCalendar
+from .calendar import AShareTradingCalendar, OpenFundCalendar, USTradingCalendar
 from .provider import QuoteSnapshot, canonical_symbol
 
 
@@ -18,13 +18,19 @@ class QuoteService:
     """Persistence and domain boundary for shared quote-cache rows."""
 
     def __init__(self, calendar: AShareTradingCalendar | None = None) -> None:
-        """初始化 A 股与美股缓存新鲜度日历。"""
+        """初始化 A 股、美股与场外基金缓存新鲜度日历。"""
         self.calendar = calendar or AShareTradingCalendar()
         self.us_calendar = USTradingCalendar()
+        self.fund_calendar = OpenFundCalendar()
 
     def calendar_for_security(self, security: Security) -> AShareTradingCalendar:
         """返回证券所属市场的交易日历。"""
-        return self.us_calendar if security.market.upper() == "US" else self.calendar
+        market = security.market.upper()
+        if market == "US":
+            return self.us_calendar
+        if market == "OF":
+            return self.fund_calendar
+        return self.calendar
 
     @staticmethod
     def security_symbol(security: Security) -> str:

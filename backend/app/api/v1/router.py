@@ -124,6 +124,7 @@ def trade_data(trade: Trade) -> dict[str, Any]:
         "market": security.market if security is not None else None,
         "symbol": security.symbol if security is not None else None,
         "name": security.name if security is not None else None,
+        "securityType": security.security_type if security is not None else None,
         "strategyId": trade.strategy_id,
         "cycleId": trade.cycle_id,
         "side": trade.side,
@@ -331,7 +332,17 @@ def create_security(
         if existing is not None:
             finish_write(session, True)
             return security_data(existing)
-        security = Security(market=market, symbol=payload.symbol, name=payload.name, security_type=payload.security_type)
+        security_type = (
+            "FUND"
+            if market == "OF" and payload.security_type.upper() == "STOCK"
+            else payload.security_type.upper()
+        )
+        security = Security(
+            market=market,
+            symbol=payload.symbol,
+            name=payload.name,
+            security_type=security_type,
+        )
         session.add(security)
         session.flush()
         finish_write(session, True)

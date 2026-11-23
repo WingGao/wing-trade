@@ -287,6 +287,7 @@ class DashboardService:
             "market": security.market if security is not None else None,
             "symbol": security.symbol if security is not None else None,
             "name": security.name if security is not None else None,
+            "securityType": security.security_type if security is not None else None,
             "currency": self._currency_for(security),
             "strategyId": strategy_id,
             "remainingQty": metrics.remaining_qty,

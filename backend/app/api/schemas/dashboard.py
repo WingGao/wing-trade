@@ -43,6 +43,7 @@ class DashboardPositionRead(APIModel):
     market: str | None = None
     symbol: str | None = None
     name: str | None = None
+    security_type: str | None = None
     currency: str | None = None
     strategy_id: str
     needs_refresh: bool = False

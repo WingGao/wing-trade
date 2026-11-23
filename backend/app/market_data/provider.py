@@ -4,13 +4,15 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, time, timezone
 from decimal import Decimal
 from typing import Any, Protocol, cast
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from app.domain.precision import ensure_decimal, round_price
+
+from .calendar import AShareTradingCalendar
 
 
 def _now() -> datetime:
@@ -397,7 +399,7 @@ class EastmoneyQuoteProvider:
                 continue
             fetched_at = self._now()
             if fetched_at.tzinfo is None:
-                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+                fetched_at = fetched_at.replace(tzinfo=UTC)
             canonical_by_identity = {
                 (self._upstream_market(canonical.split(":", 1)[0]), canonical.split(":", 1)[1]): canonical
                 for canonical in batch
@@ -425,5 +427,225 @@ class EastmoneyQuoteProvider:
             provider=self.name,
             healthy=True,
             message="行情源已配置，连通性在刷新时检查",
+        )
+
+
+class EastmoneyFundQuoteProvider:
+    """东方财富/天天基金场外开放式基金已公布单位净值行情源。"""
+
+    name = "eastmoney-fund"
+    supported_markets = frozenset({"OF"})
+    _endpoint = "https://api.fund.eastmoney.com/f10/lsjz"
+    _max_response_bytes = 2 * 1024 * 1024
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: Decimal | str | int | float = Decimal("5"),
+        transport: Callable[[Request, float], bytes] | None = None,
+        now: Callable[[], datetime] | None = None,
+        max_symbols: int = 200,
+    ) -> None:
+        """校验超时和请求上限并保存可注入传输。"""
+        timeout = (
+            Decimal(str(timeout_seconds))
+            if isinstance(timeout_seconds, float)
+            else ensure_decimal(timeout_seconds, field="timeout_seconds")
+        )
+        if not timeout.is_finite() or timeout <= 0:
+            raise ValueError("timeout_seconds must be a finite positive number")
+        if max_symbols <= 0:
+            raise ValueError("max_symbols must be positive")
+        self.timeout_seconds = timeout
+        self._transport = transport or EastmoneyQuoteProvider()._default_transport
+        self._now = now or _now
+        self.max_symbols = max_symbols
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """判断证券是否属于场外开放式基金（OF:6位数字代码）。"""
+        canonical = canonical_symbol(symbol)
+        if ":" not in canonical:
+            return False
+        market, code = canonical.split(":", 1)
+        return market in self.supported_markets and len(code) == 6 and code.isdigit()
+
+    @staticmethod
+    def _nav_source_time(value: object) -> datetime | None:
+        """将基金净值日期（YYYY-MM-DD）转换为上海时区收盘 15:00 对应的 UTC 时间。"""
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            nav_date = datetime.strptime(raw[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+        return datetime.combine(
+            nav_date, time(15, 0), tzinfo=AShareTradingCalendar.timezone
+        ).astimezone(UTC)
+
+    def _fetch_nav_rows(self, code: str, *, page_size: int = 2) -> list[dict[str, object]]:
+        """请求单只基金最近已公布单位净值记录，使用严格 Decimal 解析。"""
+        query = urlencode(
+            {
+                "fundCode": code,
+                "pageIndex": "1",
+                "pageSize": str(page_size),
+            }
+        )
+        request = Request(
+            f"{self._endpoint}?{query}",
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "wing-trade/0.1 (+backend market data)",
+                "Referer": "https://fundf10.eastmoney.com/",
+            },
+        )
+        body = self._transport(request, float(self.timeout_seconds))
+        if len(body) > self._max_response_bytes:
+            raise ValueError("eastmoney fund response exceeds size limit")
+        text = body.decode("utf-8-sig") if isinstance(body, bytes) else str(body)
+        payload = json.loads(
+            text,
+            parse_float=Decimal,
+            parse_int=int,
+            parse_constant=EastmoneyQuoteProvider._reject_json_constant,
+        )
+        if not isinstance(payload, Mapping):
+            raise ValueError("eastmoney fund response must be an object")
+        data = payload.get("Data")
+        if not isinstance(data, Mapping):
+            return []
+        rows = data.get("LSJZList")
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
+    def _snapshot_from_rows(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        symbol: str,
+        fetched_at: datetime,
+    ) -> QuoteSnapshot | None:
+        """从按日期倒序的净值列表中提取最新已公布单位净值与日涨跌幅。"""
+        valid_rows: list[tuple[Decimal, datetime | None, Decimal | None]] = []
+        for row in rows:
+            try:
+                nav = EastmoneyQuoteProvider._optional_decimal(row.get("DWJZ"), field_name="last_price")
+            except (TypeError, ValueError):
+                continue
+            if nav is None or nav <= 0:
+                continue
+            try:
+                change_pct = EastmoneyQuoteProvider._optional_decimal(
+                    row.get("JZZZL"), field_name="change_pct"
+                )
+            except (TypeError, ValueError):
+                change_pct = None
+            valid_rows.append((nav, self._nav_source_time(row.get("FSRQ")), change_pct))
+            if len(valid_rows) >= 2:
+                break
+        if not valid_rows:
+            return None
+        latest_nav, source_time, change_pct = valid_rows[0]
+        prev_close = valid_rows[1][0] if len(valid_rows) > 1 else None
+        return QuoteSnapshot(
+            symbol=symbol,
+            last_price=latest_nav,
+            prev_close=prev_close,
+            change_pct=change_pct,
+            source_time=source_time,
+            fetched_at=fetched_at,
+            provider=self.name,
+        )
+
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """逐只读取场外基金最新已公布单位净值，单只失败不阻塞其余基金。"""
+        requested: list[str] = []
+        seen: set[str] = set()
+        for value in symbols:
+            canonical = canonical_symbol(value)
+            if canonical in seen or not self.supports_symbol(canonical):
+                continue
+            seen.add(canonical)
+            requested.append(canonical)
+        if not requested:
+            return {}
+        if len(requested) > self.max_symbols:
+            raise ValueError("eastmoney fund quote request exceeds cumulative symbol limit")
+
+        result: dict[str, QuoteSnapshot] = {}
+        last_error: Exception | None = None
+        for canonical in requested:
+            _, code = canonical.split(":", 1)
+            try:
+                rows = self._fetch_nav_rows(code, page_size=2)
+            except Exception as exc:
+                last_error = exc
+                continue
+            fetched_at = self._now()
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=UTC)
+            snapshot = self._snapshot_from_rows(rows, symbol=canonical, fetched_at=fetched_at)
+            if snapshot is not None:
+                result[canonical] = snapshot
+        if last_error is not None and not result:
+            raise last_error
+        return result
+
+    def health(self) -> ProviderHealth:
+        """报告基金净值行情源已完成配置，不在健康检查时访问公网。"""
+        return ProviderHealth(
+            provider=self.name,
+            healthy=True,
+            message="基金净值源已配置，连通性在刷新时检查",
+        )
+
+
+class CompositeQuoteProvider:
+    """按证券市场路由到对应行情源的组合适配器。"""
+
+    def __init__(self, providers: Sequence[QuoteProvider], *, name: str = "eastmoney") -> None:
+        """保存有序子行情源列表，供按标的路由请求。"""
+        if not providers:
+            raise ValueError("providers must not be empty")
+        self.providers = tuple(providers)
+        self.name = name
+
+    @staticmethod
+    def _supports(provider: QuoteProvider, symbol: str) -> bool:
+        """判断子行情源是否支持目标证券。"""
+        supports = getattr(provider, "supports_symbol", None)
+        return True if supports is None else bool(supports(symbol))
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """只要任一子行情源支持该证券即返回 True。"""
+        return any(self._supports(provider, symbol) for provider in self.providers)
+
+    def get_quotes(self, symbols: Sequence[str]) -> dict[str, QuoteSnapshot]:
+        """按子行情源分组获取行情并合并，部分子源失败不丢弃其余成功结果。"""
+        result: dict[str, QuoteSnapshot] = {}
+        last_error: Exception | None = None
+        for provider in self.providers:
+            subset = [symbol for symbol in symbols if self._supports(provider, symbol)]
+            if not subset:
+                continue
+            try:
+                result.update(provider.get_quotes(subset))
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None and not result:
+            raise last_error
+        return result
+
+    def health(self) -> ProviderHealth:
+        """汇总所有子行情源健康状态，不发起公网请求。"""
+        statuses = [provider.health() for provider in self.providers]
+        healthy = all(item.healthy for item in statuses)
+        messages = [item.message for item in statuses if item.message]
+        return ProviderHealth(
+            provider=self.name,
+            healthy=healthy,
+            message="; ".join(messages) if messages else None,
         )
 

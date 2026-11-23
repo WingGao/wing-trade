@@ -83,6 +83,7 @@ class TradeRead(APIModel):
     market: str | None = None
     symbol: str | None = None
     name: str | None = None
+    security_type: str | None = None
     strategy_id: str
     cycle_id: str | None = None
     side: str

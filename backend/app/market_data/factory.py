@@ -6,7 +6,13 @@ from urllib.request import Request
 from app.config import Settings
 from app.config import settings as application_settings
 
-from .provider import EastmoneyQuoteProvider, MockQuoteProvider, QuoteProvider
+from .provider import (
+    CompositeQuoteProvider,
+    EastmoneyFundQuoteProvider,
+    EastmoneyQuoteProvider,
+    MockQuoteProvider,
+    QuoteProvider,
+)
 
 
 def create_quote_provider(
@@ -19,8 +25,17 @@ def create_quote_provider(
     if configured.quote_provider == "mock":
         return MockQuoteProvider()
     if configured.quote_provider == "eastmoney":
-        return EastmoneyQuoteProvider(
-            timeout_seconds=configured.quote_timeout_seconds,
-            transport=transport,
+        return CompositeQuoteProvider(
+            [
+                EastmoneyQuoteProvider(
+                    timeout_seconds=configured.quote_timeout_seconds,
+                    transport=transport,
+                ),
+                EastmoneyFundQuoteProvider(
+                    timeout_seconds=configured.quote_timeout_seconds,
+                    transport=transport,
+                ),
+            ],
+            name="eastmoney",
         )
     raise ValueError(f"unsupported quote provider: {configured.quote_provider}")

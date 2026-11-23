@@ -65,3 +65,24 @@ class USTradingCalendar(AShareTradingCalendar):
     afternoon_open = time(9, 30)
     afternoon_close = time(16, 0)
 
+
+class OpenFundCalendar(AShareTradingCalendar):
+    """场外开放式基金日历：仅依赖收盘后公布的单位净值，不参与盘中实时刷新。"""
+
+    def __init__(
+        self,
+        holidays: set[date] | None = None,
+        *,
+        nav_ttl_seconds: int = 6 * 3600,
+    ) -> None:
+        """初始化场外基金净值缓存有效期，避免盘中按分钟级误判过期。"""
+        super().__init__(
+            holidays=holidays,
+            trading_ttl_seconds=nav_ttl_seconds,
+            closed_ttl_seconds=nav_ttl_seconds,
+        )
+
+    def is_session_open(self, value: datetime | None = None) -> bool:
+        """场外基金无盘中连续竞价时段，始终返回 False。"""
+        return False
+

@@ -38,6 +38,7 @@ async def lookup_securities(
                 "market": row.market,
                 "symbol": row.symbol,
                 "name": row.name,
+                "securityType": row.security_type,
                 "currency": currency_for_market(row.market),
             }
     error = None
@@ -50,6 +51,7 @@ async def lookup_securities(
                 "market": candidate.market,
                 "symbol": candidate.symbol,
                 "name": candidate.name,
+                "securityType": local.security_type if local else candidate.security_type,
                 "currency": currency_for_market(candidate.market),
             }
     except Exception:
@@ -84,6 +86,7 @@ async def read_intraday(
         "symbol": snapshot.symbol,
         "currency": currency,
         "tradingDate": snapshot.trading_date,
+        "seriesKind": snapshot.series_kind,
         "points": [
             {"time": point.time.isoformat(), "price": format(point.price, ".6f")}
             for point in snapshot.points
