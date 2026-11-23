@@ -3,9 +3,9 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Lot } from '../api/types'
-import { formatQuantity, formatTargetPercent, percentInputToRate, rateToPercentInput } from '../utils/format'
+import { formatQuantity, formatTargetPercent, percentInputToRate, quantityUnit, rateToPercentInput } from '../utils/format'
 import { useViewport } from '../utils/viewport'
-const props = defineProps<{ lotId: string; lot?: Lot }>()
+const props = defineProps<{ lotId: string; lot?: Lot; isFund?: boolean }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
 const { isMobile } = useViewport()
@@ -57,11 +57,11 @@ watch(selectedTargetId, fillForm)
 </script>
 <template>
   <el-dialog v-model="visible" title="设置批次止盈目标" :width="isMobile ? '94vw' : '470px'">
-    <p class="muted">剩余 {{ formatQuantity(lot?.remainingQty) }} 股。收益率留空继承个股或全局；继承值不会保存为批次目标。</p>
+    <p class="muted">剩余 {{ formatQuantity(lot?.remainingQty, isFund) }} {{ quantityUnit(isFund) }}。收益率留空继承个股或全局；继承值不会保存为批次目标。</p>
     <p v-if="lot?.effectiveTarget && lot.effectiveTarget.source !== 'LOT'" class="muted">当前继承：{{ lot.effectiveTarget.source === 'SECURITY' ? '个股' : '全局' }} {{ formatTargetPercent(lot.effectiveTarget.targetReturnPct) }}</p>
     <el-form :disabled="saving" :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '110px'" class="profit-target-form">
-      <el-form-item v-if="activeTargets.length" label="分段目标"><el-select v-model="selectedTargetId" style="width:100%"><el-option v-for="target in activeTargets" :key="target.id" :value="target.id" :label="`${formatTargetPercent(target.targetReturnPct)} · ${formatQuantity(target.plannedSellQty)} 股`" /><el-option value="" label="新增分段目标" /></el-select></el-form-item>
-      <el-form-item label="计划卖出股数"><el-input v-model="form.plannedSellQty" inputmode="numeric" /></el-form-item>
+      <el-form-item v-if="activeTargets.length" label="分段目标"><el-select v-model="selectedTargetId" style="width:100%"><el-option v-for="target in activeTargets" :key="target.id" :value="target.id" :label="`${formatTargetPercent(target.targetReturnPct)} · ${formatQuantity(target.plannedSellQty, isFund)} ${quantityUnit(isFund)}`" /><el-option value="" label="新增分段目标" /></el-select></el-form-item>
+      <el-form-item :label="isFund ? '计划卖出份额' : '计划卖出股数'"><el-input v-model="form.plannedSellQty" :inputmode="isFund ? 'decimal' : 'numeric'" /></el-form-item>
       <el-form-item label="目标收益率"><el-input v-model="form.targetReturnPct" placeholder="留空继承个股 / 全局" inputmode="decimal"><template #append>%</template></el-input></el-form-item>
       <el-form-item label="计算口径"><el-radio-group v-model="form.calculationBasis"><el-radio value="GROSS">毛收益</el-radio><el-radio value="NET">净收益</el-radio></el-radio-group></el-form-item>
       <el-form-item label="提醒"><el-switch v-model="form.alertEnabled" /></el-form-item>

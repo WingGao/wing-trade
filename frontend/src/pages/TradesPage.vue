@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import type { Security, Trade } from '../api/types'
-import { formatDateTime, formatDecimal, formatQuantity } from '../utils/format'
+import { formatDateTime, formatDecimal, formatQuantity, isFundSecurity, priceDigits, quantityUnit } from '../utils/format'
 import { useViewport } from '../utils/viewport'
 import EditTradeDialog from '../components/EditTradeDialog.vue'
 const { isMobile } = useViewport()
@@ -18,6 +18,15 @@ let alive = true
 let loadGeneration = 0
 const securityMap = computed(() => new Map(securities.value.map((security) => [security.id, security])))
 const filtered = computed(() => trades.value.filter((trade) => !side.value || trade.side === side.value).sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime() || b.id.localeCompare(a.id)))
+
+/** 判断流水关联证券是否为场外基金，优先读流水字段并兼容目录回退。 */
+function isFundTrade(trade: Trade): boolean {
+  const security = securityMap.value.get(trade.securityId)
+  return isFundSecurity({
+    market: trade.market ?? security?.market,
+    securityType: trade.securityType ?? security?.securityType,
+  })
+}
 
 /** 优先展示流水内证券信息，兼容旧响应时用本地证券目录补全。 */
 function securityLabel(trade: Trade): { code: string; name: string } {
@@ -73,7 +82,7 @@ onBeforeUnmount(() => { alive = false; loadGeneration += 1 })
   <template v-if="!isMobile">
     <section class="page-head"><div><h2>交易流水</h2><p class="muted">所有成交可追溯，编辑和撤销均保留审计记录。</p></div><el-select v-model="side" clearable placeholder="全部方向" style="width:150px"><el-option label="买入" value="BUY" /><el-option label="卖出" value="SELL" /></el-select></section>
     <el-alert v-if="error" :title="error" type="error" :closable="false" class="status-alert" />
-    <el-card class="panel"><el-table :data="filtered" v-loading="loading" stripe empty-text="暂无交易" class="trades-table"><el-table-column label="成交时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.executedAt) }}</template></el-table-column><el-table-column label="证券" min-width="180"><template #default="{ row }"><div :title="`证券 ID：${row.securityId}`"><strong>{{ securityLabel(row).code }}</strong><div class="muted">{{ securityLabel(row).name }}</div></div></template></el-table-column><el-table-column label="方向"><template #default="{ row }"><el-tag :type="row.side === 'BUY' ? 'danger' : 'success'">{{ row.side === 'BUY' ? '买入' : '卖出' }}</el-tag></template></el-table-column><el-table-column label="数量"><template #default="{ row }">{{ formatQuantity(row.qty) }}</template></el-table-column><el-table-column label="价格"><template #default="{ row }">{{ formatDecimal(row.price, 3) }}</template></el-table-column><el-table-column label="费用"><template #default="{ row }">{{ formatDecimal(row.feesTotal) }}</template></el-table-column><el-table-column prop="status" label="状态" /><el-table-column label="操作" min-width="120"><template #default="{ row }"><el-button link type="primary" :disabled="!canEdit(row)" @click="editTrade(row)">编辑</el-button><el-button link type="danger" :disabled="row.status !== 'ACTIVE'" @click="voidTrade(row)">撤销</el-button></template></el-table-column></el-table></el-card>
+    <el-card class="panel"><el-table :data="filtered" v-loading="loading" stripe empty-text="暂无交易" class="trades-table"><el-table-column label="成交时间" min-width="170"><template #default="{ row }">{{ formatDateTime(row.executedAt) }}</template></el-table-column><el-table-column label="证券" min-width="180"><template #default="{ row }"><div :title="`证券 ID：${row.securityId}`"><strong>{{ securityLabel(row).code }}</strong><div class="muted">{{ securityLabel(row).name }}</div></div></template></el-table-column><el-table-column label="方向"><template #default="{ row }"><el-tag :type="row.side === 'BUY' ? 'danger' : 'success'">{{ row.side === 'BUY' ? '买入' : '卖出' }}</el-tag></template></el-table-column><el-table-column label="数量"><template #default="{ row }">{{ formatQuantity(row.qty, isFundTrade(row)) }}</template></el-table-column><el-table-column label="价格"><template #default="{ row }">{{ formatDecimal(row.price, priceDigits(isFundTrade(row), 3)) }}</template></el-table-column><el-table-column label="费用"><template #default="{ row }">{{ formatDecimal(row.feesTotal) }}</template></el-table-column><el-table-column prop="status" label="状态" /><el-table-column label="操作" min-width="120"><template #default="{ row }"><el-button link type="primary" :disabled="!canEdit(row)" @click="editTrade(row)">编辑</el-button><el-button link type="danger" :disabled="row.status !== 'ACTIVE'" @click="voidTrade(row)">撤销</el-button></template></el-table-column></el-table></el-card>
   </template>
   <template v-else>
     <el-alert v-if="error" :title="error" type="error" :closable="false" class="status-alert" />
@@ -97,7 +106,7 @@ onBeforeUnmount(() => { alive = false; loadGeneration += 1 })
           </div>
           <div class="m-trade-mid">
             <div class="m-trade-nums num">
-              <strong>{{ formatQuantity(row.qty) }} 股 × {{ formatDecimal(row.price, 3) }}</strong>
+              <strong>{{ formatQuantity(row.qty, isFundTrade(row)) }} {{ quantityUnit(isFundTrade(row)) }} × {{ formatDecimal(row.price, priceDigits(isFundTrade(row), 3)) }}</strong>
               <span class="m-trade-fee">费用 {{ formatDecimal(row.feesTotal) }} · {{ formatDateTime(row.executedAt) }}</span>
             </div>
             <div class="m-trade-ops">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Currency, Quote } from '../api/types'
-import { formatDateTime, formatMoney, formatSignedPercent, trendClass } from '../utils/format'
+import { formatDateTime, formatMoney, formatSignedPercent, isFundSecurity, priceDigits, trendClass } from '../utils/format'
 import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{
@@ -11,20 +11,26 @@ const props = defineProps<{
 }>()
 const { isMobile } = useViewport()
 
-/** 返回主展示值；传入 displayValue 时用于展示持仓总价值并保留三位现价回退。 */
+/** 返回当前报价单价/净值的小数位（场外基金净值固定四位）。 */
+function unitPriceDigits(quote: Quote): number {
+  return priceDigits(quote, 3)
+}
+
+/** 返回主展示值；传入 displayValue 时用于展示持仓总价值并保留单价/净值回退。 */
 function displayedPrice(quote: Quote): string {
   const hasDisplayValue = props.displayValue !== undefined
   return formatMoney(
     hasDisplayValue ? props.displayValue : quote.lastPrice,
     quote.currency ?? props.currency,
-    hasDisplayValue ? 2 : 3,
+    hasDisplayValue ? 2 : unitPriceDigits(quote),
   )
 }
 
 /** 返回报价状态的文字，避免仅用颜色表达过期信息。 */
 function quoteStatusLabel(quote: Quote): string {
   if (quote.lastPrice === null || quote.lastPrice === undefined) return '不可用'
-  return quote.isStale ? '已过期' : '实时'
+  if (quote.isStale) return '已过期'
+  return isFundSecurity(quote) ? '净值' : '实时'
 }
 
 /** 根据报价可用性和新鲜度选择状态标签样式。 */
@@ -45,7 +51,7 @@ function showCompactStatusTag(quote: Quote): boolean {
     <span :class="['quote-value-row', { 'quote-value-row--compact': props.compact }]">
       <strong>{{ displayedPrice(quote) }}</strong>
       <span v-if="!props.compact" class="quote-currency">{{ quote.currency ?? props.currency ?? '币种未知' }}</span>
-      <span v-else class="quote-unit-price">{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, 3) }}</span>
+      <span v-else class="quote-unit-price">{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, unitPriceDigits(quote)) }}</span>
       <span :class="['quote-change', trendClass(quote.changePct)]">{{ formatSignedPercent(quote.changePct) }}</span>
       <el-tooltip v-if="props.compact && showCompactStatusTag(quote)" placement="top" :show-after="150">
         <template #content>
@@ -56,7 +62,7 @@ function showCompactStatusTag(quote: Quote): boolean {
             <span v-else>报价时间：未知</span>
             <span v-if="quote.fetchedAt">获取时间：{{ formatDateTime(quote.fetchedAt) }}</span>
             <span v-else>获取时间：未知</span>
-            <span v-if="props.displayValue !== undefined">当前价：{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, 3) }}</span>
+            <span v-if="props.displayValue !== undefined">{{ isFundSecurity(quote) ? '最新净值' : '当前价' }}：{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, unitPriceDigits(quote)) }}</span>
           </div>
         </template>
         <span class="quote-status-trigger" tabindex="0">

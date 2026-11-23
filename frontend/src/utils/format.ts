@@ -1,17 +1,45 @@
 import type { Currency, ValuationStatus } from '../api/types'
 
-const numberFormatters = new Map<number, Intl.NumberFormat>()
+const numberFormatters = new Map<string, Intl.NumberFormat>()
 
-/** 获取指定小数位的本地化数字格式器。 */
-function getNumberFormatter(digits: number): Intl.NumberFormat {
-  const cached = numberFormatters.get(digits)
+/** 获取指定小数位区间的本地化数字格式器。 */
+function getNumberFormatter(minDigits: number, maxDigits = minDigits): Intl.NumberFormat {
+  const key = `${minDigits}:${maxDigits}`
+  const cached = numberFormatters.get(key)
   if (cached) return cached
   const formatter = new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
+    minimumFractionDigits: minDigits,
+    maximumFractionDigits: maxDigits,
   })
-  numberFormatters.set(digits, formatter)
+  numberFormatters.set(key, formatter)
   return formatter
+}
+
+/** 判断标的或交易对象是否属于场外开放式基金。 */
+export function isFundSecurity(
+  target?: { market?: string | null; securityType?: string | null; symbol?: string | null } | null,
+): boolean {
+  if (!target) return false
+  if (target.market?.toUpperCase() === 'OF') return true
+  if (target.securityType?.toUpperCase() === 'FUND') return true
+  return Boolean(target.symbol?.toUpperCase().startsWith('OF:'))
+}
+
+/** 返回标的对应的数量展示单位（基金为“份”，股票为“股”）。 */
+export function quantityUnit(
+  target?: { market?: string | null; securityType?: string | null; symbol?: string | null } | boolean | null,
+): string {
+  const fund = typeof target === 'boolean' ? target : isFundSecurity(target)
+  return fund ? '份' : '股'
+}
+
+/** 返回标的对应的价格/净值展示小数位（场外基金净值固定 4 位）。 */
+export function priceDigits(
+  target?: { market?: string | null; securityType?: string | null; symbol?: string | null } | boolean | null,
+  defaultDigits = 3,
+): number {
+  const fund = typeof target === 'boolean' ? target : isFundSecurity(target)
+  return fund ? 4 : defaultDigits
 }
 
 /** 将服务端十进制字符串格式化为有限小数，无法解析时显示破折号。 */
@@ -29,9 +57,14 @@ export function formatMoney(value: string | null | undefined, currency: Currency
   return `${symbol} ${formatted}`.trim()
 }
 
-/** 股数按整数展示；仅改变展示精度，不改变服务端账务值。 */
-export function formatQuantity(value: string | null | undefined): string {
-  return formatDecimal(value, 0)
+/** 股数按整数展示，基金份额按 2 至 4 位小数展示；仅改变展示精度，不改变服务端账务值。 */
+export function formatQuantity(value: string | null | undefined, isFund = false): string {
+  if (value === null || value === undefined || value === '') return '—'
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '—'
+  return isFund
+    ? getNumberFormatter(2, 4).format(parsed === 0 ? 0 : parsed)
+    : getNumberFormatter(0).format(parsed === 0 ? 0 : parsed)
 }
 
 /** 以字符串移动十进制小数点，避免止盈比例转换混入浮点误差。 */

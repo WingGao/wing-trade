@@ -10,7 +10,7 @@ import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
-import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, trendClass, valuationStatusLabel } from '../utils/format'
+import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, isFundSecurity, priceDigits, quantityUnit, trendClass, valuationStatusLabel } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
 import { useViewport } from '../utils/viewport'
 
@@ -32,7 +32,7 @@ const selectedSecurity = ref<Security | null>(null)
 const selectedLots = ref<Lot[]>([])
 const accounts = ref<Account[]>([])
 const selectedAccountId = ref('')
-const marketChoice = ref<'CN' | 'US'>('CN')
+const marketChoice = ref<'CN' | 'US' | 'OF'>('CN')
 const securityName = ref('')
 const buyVisible = ref(false)
 const sellVisible = ref(false)
@@ -273,8 +273,9 @@ async function createSecurity() {
   const symbol = raw.includes(':') ? raw.split(':')[1] : raw
   if (!symbol || !securityName.value.trim()) { ElMessage.warning('请填写证券代码和名称'); return }
   try {
-    const market = raw.includes(':') ? raw.split(':')[0] : marketChoice.value === 'US' ? 'US' : /^(000|001|002|003|300|301)\d{3}$/.test(symbol) ? 'SZ' : /^(4|8|92)/.test(symbol) ? 'BJ' : 'SH'
-    const security = await api.createSecurity({ market, symbol, name: securityName.value.trim() })
+    const market = raw.includes(':') ? raw.split(':')[0] : marketChoice.value === 'US' ? 'US' : marketChoice.value === 'OF' ? 'OF' : /^(000|001|002|003|300|301)\d{3}$/.test(symbol) ? 'SZ' : /^(4|8|92)/.test(symbol) ? 'BJ' : 'SH'
+    const securityType = market === 'OF' ? 'FUND' : 'STOCK'
+    const security = await api.createSecurity({ market, symbol, name: securityName.value.trim(), securityType })
     await chooseSecurity(security)
     ElMessage.success(`已添加 ${security.market}:${security.symbol}`)
   } catch (error) {
@@ -286,7 +287,7 @@ async function createSecurity() {
 async function chooseSecurity(candidate: SecurityCandidate) {
   let security: Security
   try {
-    security = candidate.id ? { ...candidate, id: candidate.id } : await api.createSecurity({ market: candidate.market, symbol: candidate.symbol, name: candidate.name })
+    security = candidate.id ? { ...candidate, id: candidate.id } : await api.createSecurity({ market: candidate.market, symbol: candidate.symbol, name: candidate.name, securityType: candidate.securityType ?? (candidate.market === 'OF' ? 'FUND' : 'STOCK') })
   } catch (error) { ElMessage.error(error instanceof Error ? error.message : '添加证券失败'); return }
   selectedSecurity.value = security
   securityKeyword.value = `${security.market}:${security.symbol} ${security.name ?? ''}`.trim()
@@ -430,7 +431,7 @@ onBeforeUnmount(() => {
     <el-alert v-if="searchError" :title="searchError" type="warning" :closable="false" class="status-alert" />
     <div v-if="searched && !searching && securityKeyword && !securityResults.length && !selectedSecurity" class="security-create">
       <span class="muted">本地证券库暂无匹配项，可先新增：</span>
-      <el-select v-model="marketChoice" style="width:90px"><el-option label="A股" value="CN" /><el-option label="美股" value="US" /></el-select>
+      <el-select v-model="marketChoice" style="width:108px"><el-option label="A股" value="CN" /><el-option label="场外基金" value="OF" /><el-option label="美股" value="US" /></el-select>
       <el-input v-model="securityName" placeholder="证券名称" />
       <el-button type="success" @click="createSecurity">新增证券</el-button>
     </div>
@@ -465,7 +466,7 @@ onBeforeUnmount(() => {
         <template #default="{ row }"><a class="security-link" href="#" @click.prevent="openPosition(row)"><strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong><span v-if="row.name" class="position-name">{{ row.name }}</span></a></template>
       </el-table-column>
       <el-table-column label="持仓" min-width="150">
-        <template #default="{ row }"><div class="position-holding"><strong class="position-quantity">{{ formatQuantity(row.remainingQty) }} 股</strong><span class="position-cost">加权成本 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency) }}</span></div></template>
+        <template #default="{ row }"><div class="position-holding"><strong class="position-quantity">{{ formatQuantity(row.remainingQty, isFundSecurity(row)) }} {{ quantityUnit(row) }}</strong><span class="position-cost">加权成本 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</span></div></template>
       </el-table-column>
       <el-table-column prop="quote.changePct" label="当前总价值" min-width="220" sortable="custom" :sort-orders="['descending', 'ascending']"><template #default="{ row }"><QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact /></template></el-table-column>
       <el-table-column label="持仓浮盈" min-width="135">
@@ -474,14 +475,14 @@ onBeforeUnmount(() => {
       <el-table-column label="最低价批次合计" min-width="235">
         <template #default="{ row }">
           <div v-if="row.lowestPriceGroup" class="lowest-group">
-            <div>共同买入价 <strong>{{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency) }}</strong></div>
-            <div class="lowest-group-meta"><span>{{ row.lowestPriceGroup.lotCount }}批</span><span>{{ formatQuantity(row.lowestPriceGroup.remainingQty) }}股</span><span>{{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}</span></div>
+            <div>共同买入价 <strong>{{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</strong></div>
+            <div class="lowest-group-meta"><span>{{ row.lowestPriceGroup.lotCount }}批</span><span>{{ formatQuantity(row.lowestPriceGroup.remainingQty, isFundSecurity(row)) }}{{ quantityUnit(row) }}</span><span>{{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}</span></div>
             <div :class="['group-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">组浮盈 {{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</div>
           </div>
           <span v-else class="muted">无符合条件的未结清批次</span>
         </template>
       </el-table-column>
-      <el-table-column label="策略回本参考价" min-width="135"><template #default="{ row }">{{ formatMoney(row.strategyBreakevenPrice, row.currency ?? dashboardCurrency) }}</template></el-table-column>
+      <el-table-column label="策略回本参考价" min-width="135"><template #default="{ row }">{{ formatMoney(row.strategyBreakevenPrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</template></el-table-column>
       <el-table-column label="持仓核算" width="150" fixed="right"><template #default="{ row }"><div v-if="row.needsRefresh"><el-tag type="warning">需要刷新</el-tag><el-button link type="warning" :loading="isPositionRefreshing(rowScope(row))" @click="recalculate(rowScope(row))">刷新持仓</el-button></div><span v-else class="muted">—</span></template></el-table-column>
     </el-table>
   </el-card>
@@ -556,7 +557,7 @@ onBeforeUnmount(() => {
       <div v-if="searched && !searching && securityKeyword && !securityResults.length && !selectedSecurity" class="m-security-create">
         <span class="m-section-sub">无匹配项，可新增：</span>
         <div class="m-security-create-row">
-          <el-select v-model="marketChoice" size="small" style="width:76px"><el-option label="A股" value="CN" /><el-option label="美股" value="US" /></el-select>
+          <el-select v-model="marketChoice" size="small" style="width:94px"><el-option label="A股" value="CN" /><el-option label="场外基金" value="OF" /><el-option label="美股" value="US" /></el-select>
           <el-input v-model="securityName" size="small" placeholder="证券名称" />
           <el-button size="small" type="success" @click="createSecurity">新增</el-button>
         </div>
@@ -604,7 +605,7 @@ onBeforeUnmount(() => {
                 <strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong>
                 <span v-if="row.name" class="m-pos-name">{{ row.name }}</span>
               </a>
-              <div class="m-pos-holding num">{{ formatQuantity(row.remainingQty) }}股 · 均 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency) }}</div>
+              <div class="m-pos-holding num">{{ formatQuantity(row.remainingQty, isFundSecurity(row)) }}{{ quantityUnit(row) }} · 均 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</div>
             </div>
             <div class="m-pos-col-quote">
               <QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact />
@@ -617,7 +618,7 @@ onBeforeUnmount(() => {
           <div class="m-pos-foot">
             <div class="m-pos-lowest num">
               <template v-if="row.lowestPriceGroup">
-                最低批 {{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency) }} · {{ row.lowestPriceGroup.lotCount }}批 {{ formatQuantity(row.lowestPriceGroup.remainingQty) }}股 {{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}
+                最低批 {{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }} · {{ row.lowestPriceGroup.lotCount }}批 {{ formatQuantity(row.lowestPriceGroup.remainingQty, isFundSecurity(row)) }}{{ quantityUnit(row) }} {{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}
               </template>
               <span v-else class="m-section-sub">无最低批</span>
             </div>
@@ -643,8 +644,8 @@ onBeforeUnmount(() => {
     </section>
   </template>
 
-  <BuyTradeDialog v-if="selectedSecurity" v-model="buyVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" @saved="reloadQuickTrade" />
-  <SellMatchDrawer v-if="selectedSecurity" v-model="sellVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :lots="selectedLots" @saved="reloadQuickTrade" />
+  <BuyTradeDialog v-if="selectedSecurity" v-model="buyVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :is-fund="isFundSecurity(selectedSecurity)" @saved="reloadQuickTrade" />
+  <SellMatchDrawer v-if="selectedSecurity" v-model="sellVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :is-fund="isFundSecurity(selectedSecurity)" :lots="selectedLots" @saved="reloadQuickTrade" />
   <ProfitSettingDialog v-model="globalTargetVisible" />
 </template>
 

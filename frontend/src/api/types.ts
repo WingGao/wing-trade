@@ -74,6 +74,7 @@ export interface IntradayRead {
   symbol: string
   currency: Currency
   tradingDate: string
+  seriesKind?: 'intraday' | 'nav'
   points: Array<{ time: string; price: string }>
   quote: Quote | null
   provider: string
@@ -101,6 +102,7 @@ export interface Position {
   market?: string | null
   symbol?: string | null
   name?: string | null
+  securityType?: string | null
   currency?: Currency | null
   strategyId: string
   remainingQty: string
@@ -200,6 +202,7 @@ export interface Trade {
   market?: string | null
   symbol?: string | null
   name?: string | null
+  securityType?: string | null
 }
 
 export interface TradeUpdate {
@@ -227,6 +230,7 @@ export interface PositionRefreshScope {
   market?: string | null
   symbol?: string | null
   name?: string | null
+  securityType?: string | null
 }
 
 export interface RecalculationRead {

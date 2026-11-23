@@ -3,7 +3,7 @@ import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import { useViewport } from '../utils/viewport'
-const props = defineProps<{ securityId: string; accountId?: string; currency?: string }>()
+const props = defineProps<{ securityId: string; accountId?: string; currency?: string; isFund?: boolean }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
 const { isMobile } = useViewport()
@@ -20,10 +20,10 @@ async function submit() {
 <template>
   <el-dialog v-model="visible" :title="`录入买入成交（${currency ?? 'CNY'}）`" :width="isMobile ? '94vw' : '460px'">
     <el-form :label-position="isMobile ? 'top' : 'right'" :label-width="isMobile ? undefined : '90px'" class="buy-trade-form">
-      <el-form-item label="成交数量"><el-input v-model="form.qty" inputmode="numeric" /></el-form-item>
-      <el-form-item label="成交价格"><el-input v-model="form.price" inputmode="decimal" /></el-form-item>
+      <el-form-item :label="isFund ? '确认份额' : '成交数量'"><el-input v-model="form.qty" :inputmode="isFund ? 'decimal' : 'numeric'" :placeholder="isFund ? '支持小数份额，如 1234.56' : undefined" /></el-form-item>
+      <el-form-item :label="isFund ? '单位净值' : '成交价格'"><el-input v-model="form.price" inputmode="decimal" :placeholder="isFund ? '如 1.2345' : undefined" /></el-form-item>
       <el-form-item label="成交时间"><el-date-picker v-model="form.executedAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
-      <el-form-item label="佣金"><el-input v-model="form.commission" inputmode="decimal" /></el-form-item>
+      <el-form-item :label="isFund ? '申购费' : '佣金'"><el-input v-model="form.commission" inputmode="decimal" /></el-form-item>
     </el-form>
     <template #footer><el-button @click="visible = false">取消</el-button><el-button type="primary" :loading="saving" @click="submit">保存买入</el-button></template>
   </el-dialog>

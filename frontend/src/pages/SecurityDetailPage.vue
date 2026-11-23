@@ -14,7 +14,7 @@ import IntradayChart from '../components/IntradayChart.vue'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLedgerStore } from '../stores/ledger'
-import { formatDateTime, formatMoney, formatQuantity, formatSignedPercent, trendClass } from '../utils/format'
+import { formatDateTime, formatMoney, formatQuantity, formatSignedPercent, isFundSecurity, priceDigits, trendClass } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
 import { useViewport } from '../utils/viewport'
 
@@ -48,6 +48,7 @@ const mobileActionsOpen = ref(false)
 const mobileChartOpen = ref(false)
 const selectedLotId = ref('')
 const selectedLot = computed(() => lots.value.find((lot) => lot.id === selectedLotId.value))
+const isFund = computed(() => isFundSecurity(security.value ?? { market: String(route.params.market ?? '') }))
 const currency = computed<Currency>(() => security.value?.currency ?? (security.value?.market === 'US' ? 'USD' : 'CNY'))
 const matchingAccounts = computed(() => accounts.value.filter((account) => account.currency === currency.value))
 const requestedStrategyId = computed(() => typeof route.query.strategyId === 'string' ? route.query.strategyId : undefined)
@@ -168,10 +169,10 @@ async function loadLots(afterWrite = false): Promise<boolean> {
   return true
 }
 
-/** 每次行情请求完成三秒后再刷新，保证同一页面代次只有一个请求在途。 */
+/** 每次行情请求完成三秒后再刷新；场外基金净值按日公布，不开启 3 秒轮询。 */
 function schedulePoll() {
   clearTimer()
-  if (!alive || document.hidden || !security.value || mutationActive.value) return
+  if (!alive || document.hidden || !security.value || mutationActive.value || isFund.value) return
   pollTimer = window.setTimeout(() => { pollTimer = null; void refreshMarket() }, 3000)
 }
 
@@ -325,7 +326,7 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
             <span class="detail-pos-code">{{ pos.market }}:{{ pos.symbol }}</span>
           </div>
           <div class="detail-pos-right num">
-            <span class="detail-pos-price">{{ pos.quote?.lastPrice ? formatMoney(pos.quote.lastPrice, pos.currency ?? currency, 3) : '—' }}</span>
+            <span class="detail-pos-price">{{ pos.quote?.lastPrice ? formatMoney(pos.quote.lastPrice, pos.currency ?? currency, priceDigits(pos, 3)) : '—' }}</span>
             <span :class="['detail-pos-chg', trendClass(pos.quote?.changePct)]">{{ formatSignedPercent(pos.quote?.changePct) }}</span>
           </div>
         </button>
@@ -339,7 +340,7 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
   <el-alert v-if="pageError" :title="pageError" type="error" :closable="false" class="status-alert" />
   <el-alert v-if="security && !accountId" :title="`暂无 ${currency} 账户，请先在总览中创建同币种账户后记账。`" type="warning" :closable="false" class="status-alert" />
   <el-card class="panel">
-    <template #header><div class="panel-title chart-heading"><span>当前日股价图 <span class="muted">{{ intraday?.tradingDate ?? '' }} · 每 3 秒刷新</span></span><QuoteBadge :quote="currentQuote" :currency="currency" /></div></template>
+    <template #header><div class="panel-title chart-heading"><span>{{ isFund ? '近期单位净值走势' : '当前日股价图' }} <span class="muted">{{ intraday?.tradingDate ?? '' }}{{ isFund ? ' · 已公布净值' : ' · 每 3 秒刷新' }}</span></span><QuoteBadge :quote="currentQuote" :currency="currency" /></div></template>
     <el-alert v-if="marketError" :title="`行情刷新失败：${marketError}；保留最后有效数据作为过期参考。`" type="warning" :closable="false" class="status-alert" />
     <div class="muted">来源 {{ intraday?.provider ?? '—' }} · 获取 {{ formatDateTime(intraday?.fetchedAt) }}<span v-if="intraday?.isStale || marketError"> · 行情已过期</span></div>
     <IntradayChart :data="intraday" />
@@ -352,8 +353,8 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
     </el-alert>
     <dl class="holding-summary" aria-label="持仓汇总">
       <div class="summary-item">
-        <dt>总持股数</dt>
-        <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty) }}</dd>
+        <dt>{{ isFund ? '总份额' : '总持股数' }}</dt>
+        <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty, isFund) }}</dd>
       </div>
       <div class="summary-item">
         <dt>持仓成本</dt>
@@ -371,11 +372,11 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
         <p v-else-if="holdingSummaryStale" class="summary-note">参考浮盈 · 行情已过期</p>
       </div>
     </dl>
-    <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" @set-target="addTarget" /></div>
+    <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" /></div>
     <section v-if="preferences.includeClosed" class="settled-trade-section">
       <h3 class="panel-title">已结清买卖明细</h3>
       <p class="muted">显示已结清批次的原始买入和全部有效卖出；跨批次卖出仅展示本批数量、分摊净回款和已实现盈亏。</p>
-      <SettledTradeTable :details="closedTradeDetails" :currency="currency" />
+      <SettledTradeTable :details="closedTradeDetails" :currency="currency" :is-fund="isFund" />
     </section>
   </el-card>
     </div>
@@ -398,7 +399,7 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
           </div>
           <div class="m-pos-chip-sub num">
             <span>{{ pos.symbol }}</span>
-            <span>{{ pos.quote?.lastPrice ? formatMoney(pos.quote.lastPrice, pos.currency ?? currency, 3) : '—' }}</span>
+            <span>{{ pos.quote?.lastPrice ? formatMoney(pos.quote.lastPrice, pos.currency ?? currency, priceDigits(pos, 3)) : '—' }}</span>
           </div>
         </button>
       </div>
@@ -433,7 +434,7 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
 
     <section class="m-section m-chart-box">
       <button type="button" class="m-section-head m-collapse-head" :aria-expanded="mobileChartOpen" @click="toggleMobileChart">
-        <span>日内分时 <span class="m-section-sub">{{ intraday?.tradingDate ?? '' }}</span></span>
+        <span>{{ isFund ? '近期净值' : '日内分时' }} <span class="m-section-sub">{{ intraday?.tradingDate ?? '' }}</span></span>
         <span class="m-section-sub">{{ intraday?.provider ?? '—' }}<span v-if="intraday?.isStale || marketError"> · 已过期</span> · {{ mobileChartOpen ? '收起 ▴' : '展开 ▾' }}</span>
       </button>
       <template v-if="mobileChartOpen">
@@ -456,8 +457,8 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
       </div>
       <dl class="holding-summary m-holding-summary" aria-label="持仓汇总">
         <div class="summary-item">
-          <dt>总持股数</dt>
-          <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty) }}</dd>
+          <dt>{{ isFund ? '总份额' : '总持股数' }}</dt>
+          <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty, isFund) }}</dd>
         </div>
         <div class="summary-item">
           <dt>持仓成本</dt>
@@ -475,19 +476,19 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
           <p v-else-if="holdingSummaryStale" class="summary-note">参考浮盈 · 行情已过期</p>
         </div>
       </dl>
-      <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" @set-target="addTarget" /></div>
+      <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" /></div>
     </section>
 
     <section v-if="preferences.includeClosed" class="m-section">
       <div class="m-section-head"><span>已结清买卖明细</span></div>
       <div class="m-compact-note is-info">跨批次卖出仅展示本批数量、分摊净回款和已实现盈亏。</div>
-      <SettledTradeTable :details="closedTradeDetails" :currency="currency" />
+      <SettledTradeTable :details="closedTradeDetails" :currency="currency" :is-fund="isFund" />
     </section>
   </template>
 
-  <BuyTradeDialog v-if="security" v-model="buyVisible" :security-id="security.id" :account-id="accountId" :currency="currency" @saved="reloadLots" />
-  <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :lots="lots" @saved="reloadLots" />
-  <ProfitTargetDialog v-if="selectedLot" v-model="targetVisible" :lot-id="selectedLot.id" :lot="selectedLot" @saved="reloadLots" />
+  <BuyTradeDialog v-if="security" v-model="buyVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" @saved="reloadLots" />
+  <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" :lots="lots" @saved="reloadLots" />
+  <ProfitTargetDialog v-if="selectedLot" v-model="targetVisible" :lot-id="selectedLot.id" :lot="selectedLot" :is-fund="isFund" @saved="reloadLots" />
   <ProfitSettingDialog v-model="globalTargetVisible" @saved="reloadLots" />
   <ProfitSettingDialog v-if="security" v-model="securityTargetVisible" :security-id="security.id" @saved="reloadLots" />
 </template>
