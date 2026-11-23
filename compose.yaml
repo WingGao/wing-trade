@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      CONFIG_FILE: ${CONFIG_FILE:-}
       DATABASE_URL: ${DATABASE_URL:-}
       DATABASE_BACKEND: ${DATABASE_BACKEND:-sqlite}
       DATABASE_SQLITE_PATH: /app/data/ashare_journal.db

@@ -9,5 +9,9 @@ backend/**/__pycache__/
 __pycache__/
 *.pyc
 
-# 本地环境变量包含敏感信息，仅提交脱敏示例文件
+# 本地环境变量与 YAML 配置包含敏感信息，仅提交脱敏示例文件
 .env
+/config.yaml
+/config.yml
+data/config.yaml
+data/config.yml

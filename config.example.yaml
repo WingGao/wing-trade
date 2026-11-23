@@ -1,0 +1,61 @@
+# Wing Trade 应用配置示例（脱敏模板）
+# 使用方式：复制为根目录 config.yaml（已被 .gitignore 忽略）后按需修改。
+# 优先级：YAML 配置 > 环境变量（env）> 内置默认值。
+# 任何省略或设为 null 的字段都会自动回退到对应的环境变量或默认值。
+
+database:
+  # 可选：显式连接串优先级最高，留空则根据 backend 自动拼装。
+  url: ""
+  # 数据库后端：sqlite 或 mysql，默认 sqlite。
+  backend: sqlite
+  # SQLite 文件路径；留空时本地默认使用 ./ledger.db（Compose 默认 /app/data/ashare_journal.db）。
+  sqlite_path: ""
+  # 是否输出 SQLAlchemy SQL 日志。
+  echo_sql: false
+  # 当 backend 为 mysql 时生效的分项配置；密码无需手工 URL 编码。
+  mysql:
+    host: 127.0.0.1
+    port: 3306
+    database: ashare_ledger
+    user: ashare
+    password: "change-me@2026"
+
+logging:
+  # 后端日志等级：DEBUG、INFO、WARNING、ERROR、CRITICAL。
+  level: INFO
+
+quote:
+  # 行情提供方：eastmoney 或 mock。
+  provider: eastmoney
+  # 上游行情请求超时时间（秒），必须为正数。
+  timeout_seconds: 5
+
+auth:
+  # 默认管理员邮箱：email.provider=smtp 时必填；console 模式默认 admin@localhost。
+  default_admin_email: admin@localhost
+  # 验证码 HMAC 哈希密钥；生产环境请替换为随机长字符串。
+  secret_key: "change-me-auth-secret-2026"
+  # 登录态有效天数（正整数，默认 30 天）。
+  session_days: 30
+  # 会话 Cookie 名称。
+  cookie_name: wing_session
+  # HTTPS 部署时设为 true。
+  cookie_secure: false
+
+email:
+  # 邮件发送模式：console（本地开发打印到日志）或 smtp（生产发信）。
+  provider: console
+  # 当 provider 为 smtp 时生效的发信参数（use_tls 与 use_ssl 互斥）。
+  smtp:
+    host: ""
+    port: 587
+    user: ""
+    password: ""
+    from: ""
+    # 留空（null）时自动推导：465 端口默认启用 SSL，其余端口默认启用 STARTTLS。
+    use_tls: null
+    use_ssl: null
+
+frontend:
+  # 可选：前端静态构建产物目录；留空时不挂载前端静态资源。
+  dist_dir: ""

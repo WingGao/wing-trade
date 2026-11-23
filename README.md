@@ -8,7 +8,29 @@
 docker compose up --build
 ```
 
-打开 <http://localhost:8080>（可通过环境变量 `APP_PORT` 调整宿主机端口）；健康检查位于 <http://localhost:8080/ready>。容器构建时会先编译前端静态资源并由后端 FastAPI 统一提供服务；未配置 `.env` 时保持 SQLite 默认行为，数据库文件仍持久化在 `./data/ashare_journal.db`。
+打开 <http://localhost:8080>（可通过环境变量 `APP_PORT` 调整宿主机端口）；健康检查位于 <http://localhost:8080/ready>。容器构建时会先编译前端静态资源并由后端 FastAPI 统一提供服务；未配置 `config.yaml` 或 `.env` 时保持 SQLite 默认行为，数据库文件仍持久化在 `./data/ashare_journal.db`。
+
+## 配置文件（YAML 优先，其次环境变量）
+
+后端支持通过结构化 YAML 文件进行配置，优先级按字段粒度生效：**YAML 配置 > 环境变量（env）> 内置默认值**。YAML 中未填写或设为 `null` 的字段会自动回退到对应的环境变量或默认值。
+
+- 脱敏模板：[config.example.yaml](./config.example.yaml)（本地 `config.yaml`、`config.yml` 及 `data/config.yaml`、`data/config.yml` 均已被 `.gitignore` 忽略）。
+- 本地开发直接复制模板即可生效：
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+- 配置文件查找顺序：
+  1. 显式环境变量 `CONFIG_FILE`（指定路径不存在或格式非法时会直接报错终止启动）；
+  2. 当前工作目录下的 `config.yaml` / `config.yml`；
+  3. 项目根目录下的 `config.yaml` / `config.yml`；
+  4. 以上均不存在时无缝回退到纯环境变量与默认值。
+- Docker Compose 使用 YAML 配置时，可将配置文件放入已挂载的数据目录 `./data/config.yaml`，并在 `.env` 中设置：
+
+```bash
+CONFIG_FILE=/app/data/config.yaml
+```
 
 ## 数据库配置
 
