@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/market-data-guidelines.md", "reason": "行情源、缓存、新鲜度日历、场外基金净值契约与止盈触发规则"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "ORM 模型定义与 Alembic 增量迁移规范"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "持仓批次、估值投影与日内行情契约"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "详情页图表轮询、批次展示与止盈交互规范"}
+{"file": ".trellis/spec/frontend/active-position-dashboard.md", "reason": "活动仓位展示、报价提示与涨幅排序规范"}
+{"file": ".trellis/spec/frontend/mobile-high-density.md", "reason": "移动端 768px 紧凑视图与弹窗适配规范"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/market-data-guidelines.md", "reason": "核验行情缓存、Decimal 精度、日期对齐降级与止盈不误触发契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码质量与注释规范检查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端代码质量、类型安全与无浮点账务规范检查"}
+{"file": ".trellis/spec/frontend/mobile-high-density.md", "reason": "核验移动端无横向溢出与紧凑标签展示"}

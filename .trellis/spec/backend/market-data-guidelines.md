@@ -216,3 +216,30 @@ return latest_price * remaining_qty - remaining_cost
 
 - 单元测试（`backend/tests/unit/test_us_market_data.py`）：覆盖美股四时段日历、`USMarketResolver` 缓存与精确匹配、盘前/盘中/盘后快照解析与回退、未知市场码 `105/106/107` 探测、三市场组合路由、美股分时 `iscr=1` 与跨北京午夜归属。
 - 集成测试（`backend/tests/integration/test_us_stock_api.py`）：覆盖创建 USD 账户、美股建档、碎股小数含费买卖配对、美股盘前 Dashboard 估值与 10s 轮询、按账户筛选流水/复盘汇总及美股盘前分时接口。
+
+---
+
+## Scenario: 场外宽基基金（OF）盘中指数参考估算与估算分时
+
+### 1. Scope / Trigger
+
+- 触发条件：修改 `Security.proxy_symbol` / `proxy_name` / `tracking_ratio`、`PATCH /api/v1/securities/{id}/proxy`、`QuoteService.resolve_effective_snapshot()` 或场外基金 `seriesKind="estimated_intraday"` 换算逻辑。
+- 仅适用于纯 A 股宽基场外基金（`market="OF"`）绑定 A 股指数或场内 ETF（`SH`/`SZ`/`BJ` 6 位数字代码）。
+
+### 2. Signatures
+
+- `PATCH /api/v1/securities/{security_id}/proxy`：绑定、修改或清除（`proxySymbol: null`）参考标的，默认 `trackingRatio = 0.950000`，范围 `(0, 1.5]`。
+- `QuoteService.resolve_effective_snapshot(security, snapshot, proxy_snapshot) -> QuoteSnapshot | None`
+- `GET /api/v1/securities/{security_id}/intraday?series=auto|nav`：支持 `seriesKind="estimated_intraday"` 与 `seriesKind="nav"` 切换。
+
+### 3. Contracts
+
+- **缓存纯净与解绑即复原**：`quote_cache` 中场外基金行仅保存官方已公布单位净值，参考标的另行共享 `quote_cache`；盘中估算净值仅在读取与聚合层实时派生，绝不覆盖官方净值缓存。
+- **日期对齐防重复计算**：统一按 `Asia/Shanghai` 比较官方净值日期与参考标的交易日；仅当 `nav_date < proxy_date` 时按 `estimated_change_pct = proxy_change_pct * tracking_ratio`、`estimated_price = official_nav * (1 + estimated_change_pct / 100)` 派生；`nav_date >= proxy_date` 时自动切回官方净值（`is_estimated = False`）。
+- **止盈固化边界**：`QuoteService.evaluate_targets()` 仅由 `upsert()` 写入的官方净值驱动；盘中估算触达止盈价仅在前端高亮“预估达标”，不得改写数据库 `ProfitTarget.status = TRIGGERED`。
+- **降级原则**：参考标的缺失或行情失败时平滑回退官方净值，不生成零价或阻断展示。
+
+### 4. Tests Required
+
+- 单元测试（`backend/tests/unit/test_fund_proxy_estimate.py`）：覆盖指数查名、精确估算与当日官方净值回切、参考标的缺失降级、采集器附带刷新与止盈不误固化。
+- 集成测试（`backend/tests/integration/test_fund_proxy_api.py`）：覆盖绑定校验与解绑、Dashboard/Lots 估算估值、`series=auto|nav` 估算分时换算与历史净值切换。
