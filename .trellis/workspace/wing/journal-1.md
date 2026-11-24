@@ -469,3 +469,27 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: 场外宽基基金盘中指数估算
+<!-- trellis-session: v=2 fp=e9d5c470c2df962f -->
+
+**Date**: 2026-11-24
+**Task**: 场外宽基基金盘中指数估算
+**Branch**: `master`
+
+### Summary
+
+支持纯A股宽基场外基金绑定跟踪指数/ETF参考标的，盘中按官方净值与参考标的涨跌幅实时派生估算净值、盈亏、止盈提示及估算分时曲线，晚间官方净值公布后自动切回。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8680ae2` | feat(backend): 支持纯A股宽基场外基金绑定跟踪指数与盘中估算净值/分时 |
+| `d78da26` | feat(frontend): 新增场外基金跟踪标的绑定弹窗及盘中估算净值/分时展示 |
+| `663cbc7` | docs(spec): 补充场外宽基基金盘中指数估算契约及任务规划文档 |
+
+### Status
+
+[OK] **Completed**
