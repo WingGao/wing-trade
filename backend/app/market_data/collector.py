@@ -86,9 +86,17 @@ class QuoteCollector:
                 return self.service.read_cached(session, securities, now=current)
             if self.breaker.is_open_at(current):
                 return self.service.read_cached(session, securities, now=current)
+            proxy_securities = list(self.service.proxy_securities_for(session, securities).values())
+            refresh_targets: list[Security] = []
+            seen_ids: set[str] = set()
+            for security in (*securities, *proxy_securities):
+                if security.id in seen_ids:
+                    continue
+                seen_ids.add(security.id)
+                refresh_targets.append(security)
             supported_securities = [
                 security
-                for security in securities
+                for security in refresh_targets
                 if self._provider_supports(
                     self.provider, self.service.security_symbol(security)
                 )

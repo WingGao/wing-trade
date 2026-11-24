@@ -42,6 +42,8 @@ class Account(Base):
 
 
 class Security(Base):
+    """公共证券资料表，场外基金可选绑定跟踪指数或场内 ETF 作为盘中估算参考标的。"""
+
     __tablename__ = "securities"
     __table_args__ = (UniqueConstraint("market", "symbol", name="uq_securities_market_symbol"),)
 
@@ -51,6 +53,11 @@ class Security(Base):
     name: Mapped[str | None] = mapped_column(String(128))
     security_type: Mapped[str] = mapped_column(String(32), nullable=False, default="STOCK")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
+    proxy_symbol: Mapped[str | None] = mapped_column(String(32))
+    proxy_name: Mapped[str | None] = mapped_column(String(128))
+    tracking_ratio: Mapped[Decimal] = mapped_column(
+        ExactDecimal(6), nullable=False, default=Decimal("0.950000")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 

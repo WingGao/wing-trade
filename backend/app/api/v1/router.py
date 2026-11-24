@@ -24,7 +24,7 @@ from app.api.deps import (
 )
 from app.api.schemas.account import AccountCreate
 from app.api.schemas.dashboard import DashboardRead
-from app.api.schemas.security import SecurityCreate, WatchlistItemCreate
+from app.api.schemas.security import SecurityCreate, SecurityProxyUpdate, WatchlistItemCreate
 from app.api.schemas.target import ProfitSettingWrite, ProfitTargetCreate, ProfitTargetPatch
 from app.api.schemas.trade import (
     BuyTradeRequest,
@@ -81,6 +81,7 @@ def account_data(account: Account) -> dict[str, Any]:
 
 
 def security_data(security: Security) -> dict[str, Any]:
+    """序列化证券基础资料及场外基金可选参考标的配置。"""
     return {
         "id": security.id,
         "market": security.market,
@@ -89,6 +90,46 @@ def security_data(security: Security) -> dict[str, Any]:
         "securityType": security.security_type,
         "status": security.status,
         "currency": currency_for_market(security.market),
+        "proxySymbol": security.proxy_symbol,
+        "proxyName": security.proxy_name,
+        "trackingRatio": _fmt(security.tracking_ratio, 6) if security.proxy_symbol else None,
+    }
+
+
+def quote_snapshot_data(
+    security: Security | None,
+    snapshot: Any | None,
+    *,
+    fallback_symbol: str | None = None,
+    utc_time: bool = True,
+) -> dict[str, Any]:
+    """将行情快照（含盘中估算元数据）统一序列化为 API 字典。"""
+    format_time = _dt_utc if utc_time else _dt
+    symbol = (
+        snapshot.symbol
+        if snapshot is not None
+        else (f"{security.market}:{security.symbol}" if security is not None else (fallback_symbol or ""))
+    )
+    return {
+        "symbol": symbol,
+        "securityId": security.id if security is not None else None,
+        "market": security.market if security is not None else None,
+        "currency": currency_for_market(security.market) if security is not None else None,
+        "lastPrice": _fmt(snapshot.last_price, 6) if snapshot is not None else None,
+        "prevClose": _fmt(snapshot.prev_close, 6) if snapshot is not None else None,
+        "changePct": _fmt(snapshot.change_pct, 6) if snapshot is not None else None,
+        "sourceTime": format_time(snapshot.source_time) if snapshot is not None else None,
+        "fetchedAt": format_time(snapshot.fetched_at) if snapshot is not None else None,
+        "provider": snapshot.provider if snapshot is not None else None,
+        "isStale": True if snapshot is None else snapshot.is_stale,
+        "marketSession": snapshot.market_session if snapshot is not None else None,
+        "isEstimated": bool(snapshot.is_estimated) if snapshot is not None else False,
+        "officialNav": _fmt(snapshot.official_nav, 6) if snapshot is not None else None,
+        "officialNavDate": snapshot.official_nav_date if snapshot is not None else None,
+        "proxySymbol": snapshot.proxy_symbol if snapshot is not None else None,
+        "proxyName": snapshot.proxy_name if snapshot is not None else None,
+        "proxyChangePct": _fmt(snapshot.proxy_change_pct, 6) if snapshot is not None else None,
+        "trackingRatio": _fmt(snapshot.tracking_ratio, 6) if snapshot is not None else None,
     }
 
 
@@ -344,6 +385,82 @@ def create_security(
             security_type=security_type,
         )
         session.add(security)
+        session.flush()
+        finish_write(session, True)
+        return security_data(security)
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.patch("/securities/{security_id}/proxy")
+def update_security_proxy(
+    security_id: str,
+    payload: SecurityProxyUpdate,
+    _current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """为场外基金绑定、修改或清除盘中估算跟踪参考标的（纯 A 股指数或场内 ETF）。"""
+    begin_write(session)
+    try:
+        security = _security_or_404(session, security_id)
+        if security.market.upper() != "OF":
+            raise ValidationError(
+                "仅场外基金（OF）支持绑定盘中跟踪参考标的",
+                details={"market": security.market, "symbol": security.symbol},
+            )
+        raw_proxy = (payload.proxy_symbol or "").strip().upper()
+        if not raw_proxy:
+            security.proxy_symbol = None
+            security.proxy_name = None
+            security.tracking_ratio = Decimal("0.950000")
+            session.flush()
+            finish_write(session, True)
+            return security_data(security)
+
+        if ":" not in raw_proxy:
+            raise ValidationError(
+                "参考标的代码格式无效，需要包含市场前缀（如 SH:000300 或 SZ:399006）",
+                details={"proxySymbol": payload.proxy_symbol},
+            )
+        proxy_market, proxy_code = raw_proxy.split(":", 1)
+        if proxy_market not in {"SH", "SZ", "BJ"} or len(proxy_code) != 6 or not proxy_code.isdigit():
+            raise ValidationError(
+                "当前仅支持绑定 A 股指数或场内 ETF（SH/SZ/BJ 6位数字代码）",
+                details={"proxySymbol": payload.proxy_symbol},
+            )
+        ratio = payload.tracking_ratio if payload.tracking_ratio is not None else Decimal("0.950000")
+        if not ratio.is_finite() or ratio <= 0 or ratio > Decimal("1.5"):
+            raise ValidationError(
+                "仓位跟踪系数必须在 (0, 1.5] 范围内",
+                details={"trackingRatio": str(ratio)},
+            )
+        canonical_proxy = f"{proxy_market}:{proxy_code}"
+        proxy_name = (payload.proxy_name or "").strip() or None
+
+        # 确保参考标的在 securities 表中存在对应记录，以复用 quote_cache 共享缓存与熔断机制。
+        proxy_security = session.scalar(
+            select(Security).where(Security.market == proxy_market, Security.symbol == proxy_code)
+        )
+        if proxy_security is None:
+            is_likely_index = (
+                (proxy_market == "SH" and proxy_code.startswith("000"))
+                or (proxy_market == "SZ" and proxy_code.startswith("399"))
+            )
+            proxy_security = Security(
+                market=proxy_market,
+                symbol=proxy_code,
+                name=proxy_name,
+                security_type="INDEX" if is_likely_index else "STOCK",
+            )
+            session.add(proxy_security)
+            session.flush()
+        elif proxy_name and not proxy_security.name:
+            proxy_security.name = proxy_name
+
+        security.proxy_symbol = canonical_proxy
+        security.proxy_name = proxy_name or proxy_security.name
+        security.tracking_ratio = round_price(ratio)
         session.flush()
         finish_write(session, True)
         return security_data(security)
@@ -722,9 +839,9 @@ def list_positions(
             buy_cash += cycle_metrics["total_buy_cash_out"] or Decimal("0")
             sell_cash += cycle_metrics["total_sell_cash_in"] or Decimal("0")
         metrics = AccountingService.position_metrics(group, realized_pnl=realized, total_buy_cash_out=buy_cash, total_sell_cash_in=sell_cash)
-        quote = session.get(QuoteCache, security_id)
-        if quote is not None:
-            metrics = AccountingService.position_metrics(group, latest_price=quote.last_price, realized_pnl=realized, total_buy_cash_out=buy_cash, total_sell_cash_in=sell_cash)
+        snapshots = quote_collector.service.read_cached(session, [security]) if security is not None else []
+        if snapshots:
+            metrics = AccountingService.position_metrics(group, latest_price=snapshots[0].last_price, realized_pnl=realized, total_buy_cash_out=buy_cash, total_sell_cash_in=sell_cash)
         result.append({"securityId": security_id, "market": security.market if security else None, "symbol": security.symbol if security else None, "name": security.name if security else None, "currency": currency_for_market(security.market) if security else None, "strategyId": strategy_id, "remainingQty": _fmt(metrics.remaining_qty), "remainingCost": _fmt(metrics.remaining_cost), "averageCost": _fmt(metrics.average_cost, 6), "realizedPnl": _fmt(metrics.realized_pnl), "unrealizedPnl": _fmt(metrics.unrealized_pnl), "strategyBreakevenPrice": _fmt(metrics.strategy_breakeven_price, 6), "fundsRecoveredSurplus": _fmt(metrics.funds_recovered_surplus)})
     return result
 
@@ -792,23 +909,7 @@ def list_lots(
         "realizedPnl": _fmt(summary_metrics.realized_pnl),
         "unrealizedPnl": _fmt(summary_metrics.unrealized_pnl),
     }
-    quote = (
-        None
-        if snapshot is None
-        else {
-            "symbol": snapshot.symbol,
-            "securityId": security.id,
-            "market": security.market,
-            "currency": currency_for_market(security.market),
-            "lastPrice": _fmt(snapshot.last_price, 6),
-            "prevClose": _fmt(snapshot.prev_close, 6),
-            "changePct": _fmt(snapshot.change_pct, 6),
-            "sourceTime": _dt_utc(snapshot.source_time),
-            "fetchedAt": _dt_utc(snapshot.fetched_at),
-            "provider": snapshot.provider,
-            "isStale": snapshot.is_stale,
-        }
-    )
+    quote = None if snapshot is None else quote_snapshot_data(security, snapshot, utc_time=True)
     rows = []
     for lot in lots:
         pnl = None
@@ -1050,11 +1151,27 @@ def analytics_summary(
     remaining_qty = round_qty(sum((lot.remaining_qty for lot in lots), Decimal("0")))
     unrealized = Decimal("0")
     have_quote = False
+    lot_security_ids = {lot.security_id for lot in lots}
+    lot_securities = (
+        list(session.scalars(select(Security).where(Security.id.in_(lot_security_ids))))
+        if lot_security_ids
+        else []
+    )
+    snapshots_by_symbol = {
+        snapshot.symbol: snapshot
+        for snapshot in quote_collector.service.read_cached(session, lot_securities)
+    }
+    securities_by_id = {security.id: security for security in lot_securities}
     for lot in lots:
-        quote = session.get(QuoteCache, lot.security_id)
-        if quote is not None:
+        security = securities_by_id.get(lot.security_id)
+        snapshot = (
+            snapshots_by_symbol.get(quote_collector.service.security_symbol(security))
+            if security is not None
+            else None
+        )
+        if snapshot is not None:
             have_quote = True
-            unrealized += quote.last_price * lot.remaining_qty - lot.remaining_cost
+            unrealized += snapshot.last_price * lot.remaining_qty - lot.remaining_cost
     return {
         "currency": account_row.currency,
         "totalBuyCashOut": _fmt(buy_cash),
@@ -1222,20 +1339,12 @@ async def list_quotes(
         security = security_map.get(canonical)
         snapshot = by_symbol.get(canonical)
         items.append(
-            {
-                "symbol": canonical,
-                "securityId": security.id if security is not None else None,
-                "market": security.market if security is not None else None,
-                "currency": currency_for_market(security.market) if security is not None else None,
-                "lastPrice": _fmt(snapshot.last_price, 6) if snapshot else None,
-                "prevClose": _fmt(snapshot.prev_close, 6) if snapshot else None,
-                "changePct": _fmt(snapshot.change_pct, 6) if snapshot else None,
-                "sourceTime": _dt(snapshot.source_time) if snapshot else None,
-                "fetchedAt": _dt(snapshot.fetched_at) if snapshot else None,
-                "provider": snapshot.provider if snapshot else None,
-                "isStale": True if snapshot is None else snapshot.is_stale,
-                "marketSession": snapshot.market_session if snapshot else None,
-            }
+            quote_snapshot_data(
+                security,
+                snapshot,
+                fallback_symbol=canonical,
+                utc_time=False,
+            )
         )
     return {"quotes": items}
 

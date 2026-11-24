@@ -467,7 +467,7 @@ class DashboardService:
         security: Security,
         snapshot: QuoteSnapshot | None,
     ) -> dict[str, Any]:
-        """把共享行情快照转换为首页行情 DTO。"""
+        """把共享行情快照（含场外基金盘中估算元数据）转换为首页行情 DTO。"""
         return {
             "symbol": self._security_symbol(security),
             "securityId": security.id,
@@ -481,4 +481,11 @@ class DashboardService:
             "provider": snapshot.provider if snapshot is not None else None,
             "isStale": True if snapshot is None else snapshot.is_stale,
             "marketSession": snapshot.market_session if snapshot is not None else None,
+            "isEstimated": snapshot.is_estimated if snapshot is not None else False,
+            "officialNav": snapshot.official_nav if snapshot is not None else None,
+            "officialNavDate": snapshot.official_nav_date if snapshot is not None else None,
+            "proxySymbol": snapshot.proxy_symbol if snapshot is not None else None,
+            "proxyName": snapshot.proxy_name if snapshot is not None else None,
+            "proxyChangePct": snapshot.proxy_change_pct if snapshot is not None else None,
+            "trackingRatio": snapshot.tracking_ratio if snapshot is not None else None,
         }

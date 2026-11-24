@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -43,6 +44,139 @@ class QuoteService:
         rows = session.scalars(select(Security)).all()
         return {self.security_symbol(row): row for row in rows if self.security_symbol(row) in wanted}
 
+    def proxy_securities_for(
+        self,
+        session: Session,
+        securities: Iterable[Security],
+    ) -> dict[str, Security]:
+        """提取已绑定跟踪参考标的的场外基金所对应的参考证券映射。"""
+        proxy_symbols = {
+            canonical_symbol(security.proxy_symbol)
+            for security in securities
+            if security.market.upper() == "OF" and security.proxy_symbol
+        }
+        if not proxy_symbols:
+            return {}
+        return self.securities_for_symbols(session, list(proxy_symbols))
+
+    def _read_raw_cached(
+        self,
+        session: Session,
+        security: Security,
+        *,
+        now: datetime,
+    ) -> QuoteSnapshot | None:
+        """读取单只证券在 quote_cache 中的原始行情快照，不做估算派生。"""
+        row = session.get(QuoteCache, security.id)
+        if row is None:
+            return None
+        fetched_at = self._as_utc(row.fetched_at)
+        source_time = self._as_utc(row.source_time) if row.source_time is not None else None
+        calendar = self.calendar_for_security(security)
+        stale = row.is_stale or calendar.is_stale(fetched_at, now=now)
+        market_session = (
+            None
+            if security.market.upper() == "OF"
+            else calendar.session_phase(source_time or fetched_at)
+        )
+        try:
+            return QuoteSnapshot(
+                symbol=self.security_symbol(security),
+                last_price=row.last_price,
+                prev_close=row.prev_close,
+                change_pct=row.change_pct,
+                source_time=source_time,
+                fetched_at=fetched_at,
+                provider=row.provider,
+                is_stale=stale,
+                market_session=market_session,
+            )
+        except (TypeError, ValueError):
+            # 旧缓存可能来自更宽松版本；无效价格按无行情处理，不能改写成零。
+            return None
+
+    def resolve_effective_snapshot(
+        self,
+        security: Security,
+        snapshot: QuoteSnapshot | None,
+        proxy_snapshot: QuoteSnapshot | None,
+    ) -> QuoteSnapshot | None:
+        """为已绑定参考标的的场外基金按交易日期对齐规则派生盘中估算净值。"""
+        if snapshot is None:
+            return None
+        if security.market.upper() != "OF" or not security.proxy_symbol:
+            return snapshot
+
+        proxy_symbol = canonical_symbol(security.proxy_symbol)
+        proxy_name = security.proxy_name
+        tracking_ratio = round_price(security.tracking_ratio or Decimal("0.950000"))
+        nav_date = (
+            snapshot.source_time.astimezone(self.calendar.timezone).date()
+            if snapshot.source_time is not None
+            else None
+        )
+        nav_date_str = nav_date.isoformat() if nav_date is not None else None
+
+        def _official_with_meta() -> QuoteSnapshot:
+            """返回官方净值快照并附带参考标的绑定元数据。"""
+            return QuoteSnapshot(
+                symbol=snapshot.symbol,
+                last_price=snapshot.last_price,
+                prev_close=snapshot.prev_close,
+                change_pct=snapshot.change_pct,
+                source_time=snapshot.source_time,
+                fetched_at=snapshot.fetched_at,
+                provider=snapshot.provider,
+                is_stale=snapshot.is_stale,
+                market_session=snapshot.market_session,
+                is_estimated=False,
+                official_nav=snapshot.last_price,
+                official_nav_date=nav_date_str,
+                proxy_symbol=proxy_symbol,
+                proxy_name=proxy_name,
+                proxy_change_pct=proxy_snapshot.change_pct if proxy_snapshot is not None else None,
+                tracking_ratio=tracking_ratio,
+            )
+
+        if (
+            nav_date is None
+            or proxy_snapshot is None
+            or proxy_snapshot.change_pct is None
+        ):
+            return _official_with_meta()
+
+        proxy_time = proxy_snapshot.source_time or proxy_snapshot.fetched_at
+        proxy_date = proxy_time.astimezone(self.calendar.timezone).date()
+        # 若官方净值已更新至参考标的最新交易日，自动切回官方净值，防止重复叠乘涨跌幅。
+        if nav_date >= proxy_date:
+            return _official_with_meta()
+
+        estimated_change_pct = round_price(proxy_snapshot.change_pct * tracking_ratio)
+        estimated_price = round_price(
+            snapshot.last_price * (Decimal("1") + estimated_change_pct / Decimal("100"))
+        )
+        if estimated_price <= 0:
+            return _official_with_meta()
+
+        return QuoteSnapshot(
+            symbol=snapshot.symbol,
+            last_price=estimated_price,
+            prev_close=snapshot.last_price,
+            change_pct=estimated_change_pct,
+            source_time=proxy_snapshot.source_time,
+            fetched_at=proxy_snapshot.fetched_at,
+            provider=f"{snapshot.provider}+proxy",
+            is_stale=proxy_snapshot.is_stale,
+            market_session=proxy_snapshot.market_session,
+            is_estimated=True,
+            official_nav=snapshot.last_price,
+            official_nav_date=nav_date_str,
+            proxy_symbol=proxy_symbol,
+            proxy_name=proxy_name,
+            proxy_change_pct=proxy_snapshot.change_pct,
+            tracking_ratio=tracking_ratio,
+        )
+
     def symbols_for_scope(
         self,
         session: Session,
@@ -67,40 +201,37 @@ class QuoteService:
         watch_ids.update(session.scalars(watch_stmt).all())
         return {self.security_symbol(row): row for row in rows if row.id in watch_ids}
 
-    def read_cached(self, session: Session, securities: Iterable[Security], *, now: datetime | None = None) -> list[QuoteSnapshot]:
-        """读取请求证券的共享缓存，并计算缓存是否过期。"""
+    def read_cached(
+        self,
+        session: Session,
+        securities: Iterable[Security],
+        *,
+        now: datetime | None = None,
+        apply_proxy_estimate: bool = True,
+    ) -> list[QuoteSnapshot]:
+        """读取请求证券的共享缓存，并按需为已绑定参考标的的场外基金派生盘中估算净值。"""
         current = now or datetime.now(timezone.utc)
+        security_list = list(securities)
+        proxy_snapshots: dict[str, QuoteSnapshot] = {}
+        if apply_proxy_estimate:
+            proxy_map = self.proxy_securities_for(session, security_list)
+            for proxy_symbol, proxy_security in proxy_map.items():
+                proxy_snap = self._read_raw_cached(session, proxy_security, now=current)
+                if proxy_snap is not None:
+                    proxy_snapshots[proxy_symbol] = proxy_snap
+
         result: list[QuoteSnapshot] = []
-        for security in securities:
-            row = session.get(QuoteCache, security.id)
-            if row is None:
+        for security in security_list:
+            raw_snapshot = self._read_raw_cached(session, security, now=current)
+            if raw_snapshot is None:
                 continue
-            fetched_at = self._as_utc(row.fetched_at)
-            source_time = self._as_utc(row.source_time) if row.source_time is not None else None
-            calendar = self.calendar_for_security(security)
-            stale = row.is_stale or calendar.is_stale(fetched_at, now=current)
-            market_session = (
-                None
-                if security.market.upper() == "OF"
-                else calendar.session_phase(source_time or fetched_at)
-            )
-            try:
-                result.append(
-                    QuoteSnapshot(
-                        symbol=self.security_symbol(security),
-                        last_price=row.last_price,
-                        prev_close=row.prev_close,
-                        change_pct=row.change_pct,
-                        source_time=source_time,
-                        fetched_at=fetched_at,
-                        provider=row.provider,
-                        is_stale=stale,
-                        market_session=market_session,
-                    )
-                )
-            except (TypeError, ValueError):
-                # 旧缓存可能来自更宽松版本；无效价格按无行情处理，不能改写成零。
-                continue
+            if apply_proxy_estimate and security.market.upper() == "OF" and security.proxy_symbol:
+                proxy_snap = proxy_snapshots.get(canonical_symbol(security.proxy_symbol))
+                effective = self.resolve_effective_snapshot(security, raw_snapshot, proxy_snap)
+                if effective is not None:
+                    result.append(effective)
+            else:
+                result.append(raw_snapshot)
         return result
 
     def upsert(self, session: Session, snapshots: Iterable[QuoteSnapshot], *, now: datetime | None = None) -> list[QuoteSnapshot]:
@@ -142,7 +273,7 @@ class QuoteService:
         """把请求范围内的全部缓存行情标记为过期。"""
         securities = list(securities)
         snapshots: list[QuoteSnapshot] = []
-        for snapshot in self.read_cached(session, securities):
+        for snapshot in self.read_cached(session, securities, apply_proxy_estimate=False):
             security = next((item for item in securities if self.security_symbol(item) == snapshot.symbol), None)
             row = session.get(QuoteCache, security.id) if security is not None else None
             if row is not None:

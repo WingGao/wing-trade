@@ -34,6 +34,8 @@ def canonical_symbol(value: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class QuoteSnapshot:
+    """统一行情快照，支持场外基金盘中估算派生元数据。"""
+
     symbol: str
     last_price: Decimal
     prev_close: Decimal | None = None
@@ -43,9 +45,16 @@ class QuoteSnapshot:
     provider: str = "unknown"
     is_stale: bool = False
     market_session: MarketSessionPhase | None = None
+    is_estimated: bool = False
+    official_nav: Decimal | None = None
+    official_nav_date: str | None = None
+    proxy_symbol: str | None = None
+    proxy_name: str | None = None
+    proxy_change_pct: Decimal | None = None
+    tracking_ratio: Decimal | None = None
 
     def __post_init__(self) -> None:
-        """规范证券代码并校验、量化报价数值。"""
+        """规范证券代码并校验、量化报价与估算数值。"""
         object.__setattr__(self, "symbol", canonical_symbol(self.symbol))
         last_price = round_price(ensure_decimal(self.last_price, field="last_price"))
         if last_price <= 0:
@@ -61,9 +70,28 @@ class QuoteSnapshot:
             object.__setattr__(self, "change_pct", round_price(change))
         elif self.change_pct is not None:
             object.__setattr__(self, "change_pct", round_price(ensure_decimal(self.change_pct, field="change_pct")))
+        if self.official_nav is not None:
+            official_nav = round_price(ensure_decimal(self.official_nav, field="official_nav"))
+            if official_nav <= 0:
+                raise ValueError("official_nav must be positive")
+            object.__setattr__(self, "official_nav", official_nav)
+        if self.proxy_symbol is not None:
+            object.__setattr__(self, "proxy_symbol", canonical_symbol(self.proxy_symbol))
+        if self.proxy_change_pct is not None:
+            object.__setattr__(
+                self,
+                "proxy_change_pct",
+                round_price(ensure_decimal(self.proxy_change_pct, field="proxy_change_pct")),
+            )
+        if self.tracking_ratio is not None:
+            object.__setattr__(
+                self,
+                "tracking_ratio",
+                round_price(ensure_decimal(self.tracking_ratio, field="tracking_ratio")),
+            )
 
     def stale(self, *, at: datetime | None = None) -> QuoteSnapshot:
-        """返回保留原价格与时间戳的过期快照。"""
+        """返回保留原价格、时间戳与估算元数据的过期快照。"""
         return QuoteSnapshot(
             symbol=self.symbol,
             last_price=self.last_price,
@@ -74,6 +102,13 @@ class QuoteSnapshot:
             provider=self.provider,
             is_stale=True,
             market_session=self.market_session,
+            is_estimated=self.is_estimated,
+            official_nav=self.official_nav,
+            official_nav_date=self.official_nav_date,
+            proxy_symbol=self.proxy_symbol,
+            proxy_name=self.proxy_name,
+            proxy_change_pct=self.proxy_change_pct,
+            tracking_ratio=self.tracking_ratio,
         )
 
 

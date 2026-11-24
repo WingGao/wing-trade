@@ -44,7 +44,7 @@ class IntradayPoint:
 
 @dataclass(frozen=True, slots=True)
 class IntradaySnapshot:
-    """同一次读取的当日分时或近期净值曲线与最新行情，失败时可保留真实缓存。"""
+    """同一次读取的当日分时、估算分时或近期净值曲线与最新行情，失败时可保留真实缓存。"""
 
     symbol: str
     trading_date: str
@@ -54,7 +54,7 @@ class IntradaySnapshot:
     provider: str = "eastmoney"
     is_stale: bool = False
     error: str | None = None
-    series_kind: Literal["intraday", "nav"] = "intraday"
+    series_kind: Literal["intraday", "estimated_intraday", "nav"] = "intraday"
 
 
 class SecurityInfoProvider:
@@ -180,6 +180,8 @@ class SecurityInfoProvider:
             security_type = "STOCK"
             if code.isdigit() and len(code) == 6 and upstream_market in {"0", "1"}:
                 market = "SH" if upstream_market == "1" else "BJ" if code[0] in "489" else "SZ"
+                if "指数" in security_type_name or classify in {"INDEX", "INDEXSTOCK"}:
+                    security_type = "INDEX"
             elif upstream_market in {"105", "106", "107"} or classify in {"US", "USSTOCK"}:
                 market = "US"
             elif (

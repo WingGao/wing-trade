@@ -10,7 +10,7 @@ from .common import APIModel
 
 
 class QuoteRead(APIModel):
-    """首页使用的统一行情快照。"""
+    """首页使用的统一行情快照，支持场外基金盘中估算元数据。"""
 
     symbol: str
     security_id: str | None = None
@@ -24,6 +24,13 @@ class QuoteRead(APIModel):
     provider: str | None = None
     is_stale: bool = True
     market_session: Literal["pre", "regular", "post", "closed"] | None = None
+    is_estimated: bool = False
+    official_nav: Decimal | None = None
+    official_nav_date: str | None = None
+    proxy_symbol: str | None = None
+    proxy_name: str | None = None
+    proxy_change_pct: Decimal | None = None
+    tracking_ratio: Decimal | None = None
 
 
 class LowestPriceGroupRead(APIModel):
