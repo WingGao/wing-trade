@@ -26,31 +26,46 @@ function displayedPrice(quote: Quote): string {
   )
 }
 
-/** 返回报价状态的文字，避免仅用颜色表达过期或盘前/盘后信息。 */
+/** 返回报价状态的文字，避免仅用颜色表达过期、估算或盘前/盘后信息。 */
 function quoteStatusLabel(quote: Quote): string {
   if (quote.lastPrice === null || quote.lastPrice === undefined) return '不可用'
   if (quote.isStale) return '已过期'
+  if (quote.isEstimated) return '估'
   if (isFundSecurity(quote)) return '净值'
   if (quote.marketSession === 'pre') return '盘前'
   if (quote.marketSession === 'post') return '盘后'
   return '实时'
 }
 
-/** 根据报价可用性、新鲜度与扩展时段选择状态标签样式。 */
-function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' | 'info' {
+/** 根据报价可用性、新鲜度、估算状态与扩展时段选择状态标签样式。 */
+function quoteStatusType(quote: Quote): 'success' | 'warning' | 'danger' | 'info' | 'primary' {
   if (quote.lastPrice === null || quote.lastPrice === undefined) return 'danger'
   if (quote.isStale) return 'warning'
+  if (quote.isEstimated) return 'primary'
   if (quote.marketSession === 'pre' || quote.marketSession === 'post') return 'info'
   return 'success'
 }
 
-/** 移动端紧凑模式在报价过期、不可用或处于盘前/盘后扩展时段时显示标签。 */
+/** 格式化场外基金盘中估算参考说明，便于悬浮或副标题展示。 */
+function estimateSourceText(quote: Quote): string | null {
+  if (!quote.isEstimated || !quote.proxySymbol) return null
+  const label = quote.proxyName || quote.proxySymbol
+  const proxyChg = quote.proxyChangePct ? formatSignedPercent(quote.proxyChangePct) : ''
+  const ratioNum = quote.trackingRatio ? Number(quote.trackingRatio) * 100 : 95
+  const ratioLabel = Number.isFinite(ratioNum)
+    ? `${Number.isInteger(ratioNum) ? ratioNum : ratioNum.toFixed(1).replace(/\.0$/, '')}%`
+    : '95%'
+  return `参考 ${label}${proxyChg ? ` ${proxyChg}` : ''} × ${ratioLabel}`
+}
+
+/** 移动端紧凑模式在报价过期、不可用、盘中估算或处于盘前/盘后扩展时段时显示标签。 */
 function showCompactStatusTag(quote: Quote): boolean {
   if (!isMobile.value) return true
   return (
     quote.lastPrice === null
     || quote.lastPrice === undefined
     || Boolean(quote.isStale)
+    || Boolean(quote.isEstimated)
     || quote.marketSession === 'pre'
     || quote.marketSession === 'post'
   )
@@ -67,14 +82,18 @@ function showCompactStatusTag(quote: Quote): boolean {
       <el-tooltip v-if="props.compact && showCompactStatusTag(quote)" placement="top" :show-after="150">
         <template #content>
           <div class="quote-tooltip">
-            <strong>报价更新信息</strong>
+            <strong>{{ quote.isEstimated ? '盘中估算净值' : '报价更新信息' }}</strong>
+            <span v-if="estimateSourceText(quote)">{{ estimateSourceText(quote) }}</span>
+            <span v-if="quote.isEstimated && quote.officialNav">
+              官方净值：{{ formatMoney(quote.officialNav, quote.currency ?? props.currency, unitPriceDigits(quote)) }}<template v-if="quote.officialNavDate"> ({{ quote.officialNavDate }})</template>
+            </span>
             <span v-if="quote.marketSession">交易时段：{{ marketSessionLabel(quote.marketSession) }}</span>
             <span v-if="quote.provider">行情来源：{{ quote.provider }}</span>
             <span v-if="quote.sourceTime">报价时间：{{ formatDateTime(quote.sourceTime) }}</span>
             <span v-else>报价时间：未知</span>
             <span v-if="quote.fetchedAt">获取时间：{{ formatDateTime(quote.fetchedAt) }}</span>
             <span v-else>获取时间：未知</span>
-            <span v-if="props.displayValue !== undefined">{{ isFundSecurity(quote) ? '最新净值' : '当前价' }}：{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, unitPriceDigits(quote)) }}</span>
+            <span v-if="props.displayValue !== undefined">{{ quote.isEstimated ? '估算净值' : isFundSecurity(quote) ? '最新净值' : '当前价' }}：{{ formatMoney(quote.lastPrice, quote.currency ?? props.currency, unitPriceDigits(quote)) }}</span>
           </div>
         </template>
         <span class="quote-status-trigger" tabindex="0">
@@ -84,6 +103,8 @@ function showCompactStatusTag(quote: Quote): boolean {
       <el-tag v-else-if="!props.compact" :type="quoteStatusType(quote)" size="small">{{ quoteStatusLabel(quote) }}</el-tag>
     </span>
     <span v-if="!props.compact" class="quote-meta">
+      <span v-if="estimateSourceText(quote)">{{ estimateSourceText(quote) }}</span>
+      <span v-if="quote.isEstimated && quote.officialNav">官方净值 {{ formatMoney(quote.officialNav, quote.currency ?? props.currency, unitPriceDigits(quote)) }}<template v-if="quote.officialNavDate">({{ quote.officialNavDate }})</template></span>
       <span v-if="quote.provider">{{ quote.provider }}</span>
       <span v-if="quote.sourceTime">报价 {{ formatDateTime(quote.sourceTime) }}</span>
       <span v-else>报价时间未知</span>

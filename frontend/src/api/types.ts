@@ -53,6 +53,9 @@ export interface Security {
   securityType?: string
   status?: string
   currency?: Currency
+  proxySymbol?: string | null
+  proxyName?: string | null
+  trackingRatio?: string | null
 }
 
 export interface SecurityCandidate extends Omit<Security, 'id'> {
@@ -76,7 +79,7 @@ export interface IntradayRead {
   symbol: string
   currency: Currency
   tradingDate: string
-  seriesKind?: 'intraday' | 'nav'
+  seriesKind?: 'intraday' | 'estimated_intraday' | 'nav'
   points: Array<{ time: string; price: string }>
   quote: Quote | null
   provider: string
@@ -98,6 +101,13 @@ export interface Quote {
   market?: string | null
   currency?: Currency | null
   marketSession?: MarketSessionPhase | null
+  isEstimated?: boolean
+  officialNav?: string | null
+  officialNavDate?: string | null
+  proxySymbol?: string | null
+  proxyName?: string | null
+  proxyChangePct?: string | null
+  trackingRatio?: string | null
 }
 
 export interface Position {

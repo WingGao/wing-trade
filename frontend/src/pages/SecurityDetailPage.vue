@@ -10,6 +10,7 @@ import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitTargetDialog from '../components/ProfitTargetDialog.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
+import FundProxyDialog from '../components/FundProxyDialog.vue'
 import IntradayChart from '../components/IntradayChart.vue'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import { useAccountsStore } from '../stores/accounts'
@@ -46,11 +47,23 @@ const sellVisible = ref(false)
 const targetVisible = ref(false)
 const globalTargetVisible = ref(false)
 const securityTargetVisible = ref(false)
+const proxyDialogVisible = ref(false)
+const fundSeriesMode = ref<'auto' | 'nav'>('auto')
 const mobileActionsOpen = ref(false)
 const mobileChartOpen = ref(false)
 const selectedLotId = ref('')
 const selectedLot = computed(() => lots.value.find((lot) => lot.id === selectedLotId.value))
 const isFund = computed(() => isFundSecurity(security.value ?? { market: String(route.params.market ?? '') }))
+const hasProxyBinding = computed(() => Boolean(isFund.value && security.value?.proxySymbol))
+const proxySummaryText = computed(() => {
+  if (!hasProxyBinding.value || !security.value?.proxySymbol) return ''
+  const label = security.value.proxyName || security.value.proxySymbol
+  const ratio = security.value.trackingRatio ? Number(security.value.trackingRatio) * 100 : 95
+  const ratioText = Number.isFinite(ratio)
+    ? `${Number.isInteger(ratio) ? ratio : ratio.toFixed(1).replace(/\.0$/, '')}%`
+    : '95%'
+  return `跟踪：${label} (${security.value.proxySymbol}) · ${ratioText}`
+})
 const currency = computed<Currency>(() => security.value?.currency ?? ((security.value?.market ?? String(route.params.market ?? '')).toUpperCase() === 'US' ? 'USD' : 'CNY'))
 const matchingAccounts = computed(() => accounts.value.filter((account) => account.currency === currency.value))
 const requestedStrategyId = computed(() => typeof route.query.strategyId === 'string' ? route.query.strategyId : undefined)
@@ -179,10 +192,11 @@ async function loadLots(afterWrite = false): Promise<boolean> {
   return true
 }
 
-/** 每次行情请求完成三秒后再刷新；场外基金净值按日公布，不开启 3 秒轮询。 */
+/** 每次行情请求完成三秒后再刷新；未绑定跟踪标的的场外基金按日公布净值，不开启 3 秒轮询。 */
 function schedulePoll() {
   clearTimer()
-  if (!alive || document.hidden || !security.value || mutationActive.value || isFund.value) return
+  if (!alive || document.hidden || !security.value || mutationActive.value) return
+  if (isFund.value && (!hasProxyBinding.value || fundSeriesMode.value === 'nav')) return
   pollTimer = window.setTimeout(() => { pollTimer = null; void refreshMarket() }, 3000)
 }
 
@@ -193,10 +207,11 @@ async function refreshMarket() {
   const currentGeneration = generation
   const currentDataGeneration = dataGeneration
   const id = security.value.id
+  const series = hasProxyBinding.value ? fundSeriesMode.value : 'auto'
   /** 为当前证券代次执行一次串行行情与批次刷新。 */
   const execute = async () => {
     try {
-      const result = await api.intraday(id)
+      const result = await api.intraday(id, series)
       if (!alive || currentGeneration !== generation || currentDataGeneration !== dataGeneration || mutationActive.value) return
       await loadLots()
       if (!alive || currentGeneration !== generation || currentDataGeneration !== dataGeneration) return
@@ -236,6 +251,8 @@ async function loadPage() {
   sellVisible.value = false
   targetVisible.value = false
   securityTargetVisible.value = false
+  proxyDialogVisible.value = false
+  fundSeriesMode.value = 'auto'
   try {
     const market = String(route.params.market).toUpperCase()
     const symbol = String(route.params.symbol).toUpperCase()
@@ -295,6 +312,23 @@ async function recalculate() {
 /** 将设置操作锚定至本行批次，不在列表外生成批次按钮。 */
 function addTarget(lot: Lot) { selectedLotId.value = lot.id; targetVisible.value = true }
 
+/** 跟踪参考标的保存或解绑后，立即刷新详情页行情、估算分时与批次浮盈。 */
+function handleProxySaved(updated: Security): void {
+  security.value = updated
+  fundSeriesMode.value = 'auto'
+  invalidateReads()
+  void refreshMarket()
+}
+
+/** 在场外基金盘中估算分时与近 30 日官方净值曲线之间切换展示。 */
+function switchFundSeries(mode: 'auto' | 'nav'): void {
+  if (fundSeriesMode.value === mode) return
+  fundSeriesMode.value = mode
+  marketFlight = null
+  clearTimer()
+  void refreshMarket()
+}
+
 /** 标签页恢复可见立即刷新，隐藏时不再安排请求。 */
 function handleVisibility() { clearTimer(); if (!document.hidden) void refreshMarket() }
 
@@ -351,13 +385,51 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
     </aside>
     <div class="detail-main">
   <section class="page-head detail-head">
-    <div><h2>{{ route.params.market }}:{{ route.params.symbol }} {{ security?.name ?? '' }}</h2><p class="muted">批次、配对和止盈设置</p></div>
-    <div class="toolbar"><el-select v-if="matchingAccounts.length" v-model="accountId" aria-label="当前账户" style="width:170px"><el-option v-for="account in matchingAccounts" :key="account.id" :value="account.id" :label="account.name" /></el-select><el-button @click="globalTargetVisible = true">全局止盈设置</el-button><el-button :disabled="!security" @click="securityTargetVisible = true">个股止盈设置</el-button><el-button :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button><el-button type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button></div>
+    <div>
+      <h2>{{ route.params.market }}:{{ route.params.symbol }} {{ security?.name ?? '' }}</h2>
+      <p class="muted">
+        批次、配对和止盈设置
+        <template v-if="isFund">
+          ·
+          <span v-if="hasProxyBinding" class="proxy-inline-meta">{{ proxySummaryText }}</span>
+          <span v-else>未绑定盘中跟踪标的</span>
+        </template>
+      </p>
+    </div>
+    <div class="toolbar"><el-select v-if="matchingAccounts.length" v-model="accountId" aria-label="当前账户" style="width:170px"><el-option v-for="account in matchingAccounts" :key="account.id" :value="account.id" :label="account.name" /></el-select><el-button v-if="isFund" :disabled="!security" @click="proxyDialogVisible = true">{{ hasProxyBinding ? '修改跟踪标的' : '绑定跟踪标的' }}</el-button><el-button @click="globalTargetVisible = true">全局止盈设置</el-button><el-button :disabled="!security" @click="securityTargetVisible = true">个股止盈设置</el-button><el-button :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button><el-button type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button></div>
   </section>
   <el-alert v-if="pageError" :title="pageError" type="error" :closable="false" class="status-alert" />
   <el-alert v-if="security && !accountId" :title="`暂无 ${currency} 账户，请先在总览中创建同币种账户后记账。`" type="warning" :closable="false" class="status-alert" />
   <el-card class="panel">
-    <template #header><div class="panel-title chart-heading"><span>{{ isFund ? '近期单位净值走势' : '当前日股价图' }} <span class="muted">{{ intraday?.tradingDate ?? '' }}{{ isFund ? ' · 已公布净值' : ' · 每 3 秒刷新' }}</span></span><QuoteBadge :quote="currentQuote" :currency="currency" /></div></template>
+    <template #header>
+      <div class="panel-title chart-heading">
+        <div class="chart-title-group">
+          <span>
+            {{
+              intraday?.seriesKind === 'estimated_intraday'
+                ? '盘中估算净值走势'
+                : isFund
+                  ? '近期单位净值走势'
+                  : '当前日股价图'
+            }}
+            <span class="muted">
+              {{ intraday?.tradingDate ?? '' }}{{
+                intraday?.seriesKind === 'estimated_intraday'
+                  ? ' · 盘中实时估算 · 每 3 秒刷新'
+                  : isFund
+                    ? ' · 已公布净值'
+                    : ' · 每 3 秒刷新'
+              }}
+            </span>
+          </span>
+          <el-button-group v-if="hasProxyBinding" size="small">
+            <el-button :type="fundSeriesMode === 'auto' ? 'primary' : 'default'" @click="switchFundSeries('auto')">盘中估算</el-button>
+            <el-button :type="fundSeriesMode === 'nav' ? 'primary' : 'default'" @click="switchFundSeries('nav')">历史净值</el-button>
+          </el-button-group>
+        </div>
+        <QuoteBadge :quote="currentQuote" :currency="currency" />
+      </div>
+    </template>
     <el-alert v-if="marketError" :title="`行情刷新失败：${marketError}；保留最后有效数据作为过期参考。`" type="warning" :closable="false" class="status-alert" />
     <div class="muted">来源 {{ intraday?.provider ?? '—' }} · 获取 {{ formatDateTime(intraday?.fetchedAt) }}<span v-if="intraday?.isStale || marketError"> · 行情已过期</span></div>
     <IntradayChart :data="intraday" />
@@ -441,6 +513,7 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
         </el-select>
         <el-button size="small" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
         <el-button size="small" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button>
+        <el-button v-if="isFund" size="small" :disabled="!security" @click="proxyDialogVisible = true">{{ hasProxyBinding ? '修改跟踪' : '绑定跟踪' }}</el-button>
         <el-button size="small" :disabled="!security" @click="securityTargetVisible = true">个股止盈</el-button>
         <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
       </div>
@@ -451,10 +524,17 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
 
     <section class="m-section m-chart-box">
       <button type="button" class="m-section-head m-collapse-head" :aria-expanded="mobileChartOpen" @click="toggleMobileChart">
-        <span>{{ isFund ? '近期净值' : '日内分时' }} <span class="m-section-sub">{{ intraday?.tradingDate ?? '' }}</span></span>
+        <span>{{ intraday?.seriesKind === 'estimated_intraday' ? '盘中估算分时' : isFund ? '近期净值' : '日内分时' }} <span class="m-section-sub">{{ intraday?.tradingDate ?? '' }}</span></span>
         <span class="m-section-sub">{{ intraday?.provider ?? '—' }}<span v-if="intraday?.isStale || marketError"> · 已过期</span> · {{ mobileChartOpen ? '收起 ▴' : '展开 ▾' }}</span>
       </button>
       <template v-if="mobileChartOpen">
+        <div v-if="hasProxyBinding" class="m-series-toggle">
+          <span class="m-section-sub">{{ proxySummaryText }}</span>
+          <el-button-group size="small">
+            <el-button :type="fundSeriesMode === 'auto' ? 'primary' : 'default'" @click="switchFundSeries('auto')">盘中估算</el-button>
+            <el-button :type="fundSeriesMode === 'nav' ? 'primary' : 'default'" @click="switchFundSeries('nav')">历史净值</el-button>
+          </el-button-group>
+        </div>
         <div v-if="marketError" class="m-compact-note is-warning">行情刷新失败：{{ marketError }}；保留最后有效数据作为过期参考。</div>
         <div class="m-chart-body"><IntradayChart :data="intraday" /></div>
       </template>
@@ -508,12 +588,16 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
   <ProfitTargetDialog v-if="selectedLot" v-model="targetVisible" :lot-id="selectedLot.id" :lot="selectedLot" :is-fund="isFund" @saved="reloadLots" />
   <ProfitSettingDialog v-model="globalTargetVisible" @saved="reloadLots" />
   <ProfitSettingDialog v-if="security" v-model="securityTargetVisible" :security-id="security.id" @saved="reloadLots" />
+  <FundProxyDialog v-if="security && isFund" v-model="proxyDialogVisible" :security="security" @saved="handleProxySaved" />
 </template>
 
 <style scoped>
 .detail-head { gap: 16px; flex-wrap: wrap; }
 .detail-head .toolbar { flex-wrap: wrap; }
 .chart-heading, .lot-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.chart-title-group { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.proxy-inline-meta { color: #2563eb; font-weight: 500; }
+.m-series-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 2px; flex-wrap: wrap; }
 .holding-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 18px; border-top: 1px solid var(--el-border-color-lighter); border-bottom: 1px solid var(--el-border-color-lighter); }
 .summary-item { min-width: 0; padding: 12px 16px; border-left: 1px solid var(--el-border-color-lighter); }
 .summary-item:first-child { border-left: 0; padding-left: 0; }

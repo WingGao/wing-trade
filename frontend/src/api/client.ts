@@ -61,8 +61,10 @@ export const api = {
   securities: (search = '') => request<Security[]>(`/securities?${query({ query: search })}`),
   /** 通过外部行情源查找证券名称，查询本身不创建本地证券。 */
   lookupSecurities: (search: string) => request<{ securities: SecurityCandidate[]; error: string | null }>(`/securities/lookup?${query({ query: search })}`),
-  /** 读取证券真实当日日内时序及对应当前报价。 */
-  intraday: (securityId: string) => request<IntradayRead>(`/securities/${securityId}/intraday`),
+  /** 读取证券真实当日日内时序、场外基金估算分时或近期净值曲线及对应当前报价。 */
+  intraday: (securityId: string, series: 'auto' | 'nav' = 'auto') => request<IntradayRead>(`/securities/${securityId}/intraday?${query({ series: series === 'auto' ? undefined : series })}`),
+  /** 绑定、修改或清除场外基金的盘中估算跟踪参考标的。 */
+  updateSecurityProxy: (securityId: string, payload: { proxySymbol: string | null; proxyName?: string | null; trackingRatio?: string | null }) => request<Security>(`/securities/${securityId}/proxy`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createSecurity: (payload: Record<string, unknown>) => request<Security>('/securities', { method: 'POST', body: JSON.stringify(payload) }),
   /** 读取同一行情切片下的批次、浮盈和继承止盈目标。 */
   lots: (securityId: string, includeClosed = false, accountId?: string, strategyId?: string) => request<LotsRead>(`/securities/${securityId}/lots?${query({ includeClosed, accountId, strategyId })}`),

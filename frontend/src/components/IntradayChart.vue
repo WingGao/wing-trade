@@ -29,6 +29,7 @@ const PLOT_HEIGHT = PLOT_BOTTOM - PLOT_TOP
 
 const props = defineProps<{ data: IntradayRead | null }>()
 const isNavSeries = computed(() => props.data?.seriesKind === 'nav')
+const isEstimatedIntraday = computed(() => props.data?.seriesKind === 'estimated_intraday')
 const containerRef = ref<HTMLDivElement | null>(null)
 const svgRef = ref<SVGSVGElement | null>(null)
 const hoverSvgX = ref<number | null>(null)
@@ -161,7 +162,7 @@ const plot = computed(() => {
   const padding = Math.max((high - low) * 0.15, high * 0.0005)
   const min = low - padding
   const max = high + padding
-  const digits = isNavSeries.value ? 4 : 3
+  const digits = (isNavSeries.value || isEstimatedIntraday.value) ? 4 : 3
   const currency = props.data?.currency
   const baselineY = basePrice !== null
     ? PLOT_BOTTOM - ((basePrice - min) / (max - min)) * PLOT_HEIGHT
@@ -224,7 +225,7 @@ const tooltipStyle = computed<Record<string, string>>(() => {
       ref="svgRef"
       viewBox="0 0 900 260"
       role="img"
-      :aria-label="isNavSeries ? '近期单位净值走势图' : '当前交易日股价走势图'"
+      :aria-label="isNavSeries ? '近期单位净值走势图' : isEstimatedIntraday ? '当日盘中估算净值走势图' : '当前交易日股价走势图'"
       @pointermove="handlePointerMove"
       @pointerdown="handlePointerMove"
       @pointerleave="handlePointerLeave"

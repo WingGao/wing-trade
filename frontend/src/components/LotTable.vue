@@ -27,6 +27,20 @@ function lotMarketValue(lot: Lot): string | null {
   return Number.isFinite(total) ? total.toFixed(2) : null
 }
 
+/** 判断持有中批次在盘中估算净值下是否已预估触达有效止盈目标价（不落库固化）。 */
+function isEstimatedTargetReached(lot: Lot): boolean {
+  if (lot.status !== 'OPEN' || !props.quote?.isEstimated || !props.quote.lastPrice) return false
+  const current = Number(props.quote.lastPrice)
+  if (!Number.isFinite(current) || current <= 0) return false
+  const activeTargets = (lot.targets ?? []).filter((target) => target.status === 'ACTIVE' && target.alertEnabled && target.targetPriceEstimate)
+  if (activeTargets.some((target) => current >= Number(target.targetPriceEstimate))) return true
+  const inherited = lot.effectiveTarget
+  if (inherited && inherited.source !== 'LOT' && inherited.alertEnabled && inherited.targetPriceEstimate) {
+    return current >= Number(inherited.targetPriceEstimate)
+  }
+  return false
+}
+
 /** 展示仍可操作的分段目标，已完成和取消记录不再掩盖上级继承。 */
 function formatTargets(lot: Lot): string {
   const digits = priceDigits(props.isFund, 3)
@@ -46,7 +60,7 @@ function formatTargets(lot: Lot): string {
     <el-table-column :label="isFund ? '现值 / 净值' : '现值 / 现价'" min-width="135"><template #default="{ row }"><template v-if="row.status === 'OPEN' && lotMarketValue(row) !== null"><div>{{ formatMoney(lotMarketValue(row), currency) }}</div><div class="muted">{{ isFund ? '净值' : '现价' }} {{ formatMoney(quote?.lastPrice, currency, priceDigits(isFund, 3)) }}</div></template><span v-else class="muted">—</span></template></el-table-column>
     <el-table-column label="状态"><template #default="{ row }"><el-tag :type="row.status === 'OPEN' ? 'success' : 'info'">{{ row.status === 'OPEN' ? '持有中' : '已结清' }}</el-tag></template></el-table-column>
     <el-table-column label="浮盈 / 收益率" min-width="160"><template #default="{ row }"><template v-if="row.status === 'OPEN'"><div :class="trendClass(row.unrealizedPnl)">{{ formatMoney(row.unrealizedPnl, currency) }}</div><div :class="['muted', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</div></template><span v-else class="muted">—</span></template></el-table-column>
-    <el-table-column label="止盈目标" min-width="235"><template #default="{ row }"><div v-if="formatTargets(row)">{{ formatTargets(row) }}<div class="muted">批次设置</div></div><template v-if="row.effectiveTarget && row.effectiveTarget.source !== 'LOT'"><div>{{ formatMoney(row.effectiveTarget.targetPriceEstimate, currency, priceDigits(isFund, 3)) }} / {{ formatTargetPercent(row.effectiveTarget.targetReturnPct) }}</div><div class="muted">继承{{ row.effectiveTarget.source === 'SECURITY' ? '个股' : '全局' }}</div></template><span v-else-if="!formatTargets(row)" class="muted">未设置</span><el-button v-if="row.status === 'OPEN'" link type="primary" @click="emit('setTarget', row)">设置</el-button></template></el-table-column>
+    <el-table-column label="止盈目标" min-width="235"><template #default="{ row }"><div v-if="formatTargets(row)">{{ formatTargets(row) }}<div class="muted">批次设置</div></div><template v-if="row.effectiveTarget && row.effectiveTarget.source !== 'LOT'"><div>{{ formatMoney(row.effectiveTarget.targetPriceEstimate, currency, priceDigits(isFund, 3)) }} / {{ formatTargetPercent(row.effectiveTarget.targetReturnPct) }}</div><div class="muted">继承{{ row.effectiveTarget.source === 'SECURITY' ? '个股' : '全局' }}</div></template><span v-else-if="!formatTargets(row)" class="muted">未设置</span><el-tag v-if="isEstimatedTargetReached(row)" type="warning" size="small" style="margin-right:6px">预估达标</el-tag><el-button v-if="row.status === 'OPEN'" link type="primary" @click="emit('setTarget', row)">设置</el-button></template></el-table-column>
   </el-table>
   <div v-else class="m-lot-list">
     <div v-if="!sortedLots.length" class="m-empty">暂无批次</div>
@@ -91,6 +105,7 @@ function formatTargets(lot: Lot): string {
           <span class="m-lot-source">（继承{{ row.effectiveTarget.source === 'SECURITY' ? '个股' : '全局' }}）</span>
         </template>
         <span v-else-if="!formatTargets(row)" class="m-lot-source">未设置</span>
+        <el-tag v-if="isEstimatedTargetReached(row)" type="warning" size="small" style="margin-left:6px">预估达标</el-tag>
       </div>
     </article>
   </div>
