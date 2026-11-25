@@ -45,6 +45,9 @@ async function mockWorkspaceApi(page: Page) {
       lastSellPrice: null,
       lastSellExecutedAt: null,
       vsLastSellPct: null,
+      avgAmplitude20d: null,
+      avgAmplitudeDays: null,
+      avgAmplitudeAsOf: null,
       quote: {
         symbol: 'SZ:300760',
         securityId: 'sec-mr',
@@ -88,6 +91,9 @@ async function mockWorkspaceApi(page: Page) {
       lastSellPrice: '264.500000',
       lastSellExecutedAt: '2026-11-20T06:00:00+08:00',
       vsLastSellPct: '-6.011342',
+      avgAmplitude20d: '4.120000',
+      avgAmplitudeDays: 20,
+      avgAmplitudeAsOf: '2026-11-24',
       quote: {
         symbol: 'SZ:300750',
         securityId: 'sec-nd',
@@ -131,6 +137,9 @@ async function mockWorkspaceApi(page: Page) {
       lastSellPrice: '75.800000',
       lastSellExecutedAt: '2026-11-18T06:00:00+08:00',
       vsLastSellPct: '-5.738786',
+      avgAmplitude20d: '3.450000',
+      avgAmplitudeDays: 20,
+      avgAmplitudeAsOf: '2026-11-24',
       quote: {
         symbol: 'SZ:000333',
         securityId: 'sec-md',
@@ -259,6 +268,14 @@ test('PC 端活动仓位展示上次卖出价、筛选、五维正反排序并�
   await expect(rows.nth(1)).toContainText('暂无卖出')
   await expect(rows.nth(2)).toContainText('264.500')
   await expect(rows.nth(2)).toContainText('-6.01%')
+
+  // 验证近 20 日平均振幅第 4 行展示与表头保持 3 个排序项（不含振幅排序）
+  await expect(page.locator('.ap-th-prices .ap-sort-btn')).toHaveCount(3)
+  await expect(rows.nth(0).locator('.ap-amplitude-row')).toContainText('20日振')
+  await expect(rows.nth(0).locator('.ap-amplitude-row')).toContainText('3.45%')
+  await expect(rows.nth(1).locator('.ap-amplitude-row')).toContainText('20日振')
+  await expect(rows.nth(1).locator('.ap-amplitude-row')).toContainText('—')
+  await expect(rows.nth(2).locator('.ap-amplitude-row')).toContainText('4.12%')
 
   // 验证 PC 右栏默认联动展示排序第一只（美的集团）的详情及上次卖出价
   const detail = page.locator('.workspace-detail')

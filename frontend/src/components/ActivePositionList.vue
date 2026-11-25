@@ -5,6 +5,7 @@ import {
   formatCompactMoney,
   formatDateTime,
   formatDecimal,
+  formatPercent,
   formatQuantity,
   formatSignedMoney,
   formatSignedPercent,
@@ -212,6 +213,17 @@ function estimateSourceText(quote: Quote): string | null {
     ? `${Number.isInteger(ratioNum) ? ratioNum : ratioNum.toFixed(1).replace(/\.0$/, '')}%`
     : '95%'
   return `参考 ${label}${proxyChg ? ` ${proxyChg}` : ''} × ${ratioLabel}`
+}
+
+/** 生成近 20 个交易日平均振幅的悬停口径说明文案。 */
+function amplitudeTooltipText(position: DashboardPosition): string {
+  if (isFundSecurity(position)) return '场外基金不统计日内振幅'
+  if (position.avgAmplitude20d !== null && position.avgAmplitude20d !== undefined && position.avgAmplitude20d !== '') {
+    const days = position.avgAmplitudeDays ?? 20
+    const asOf = position.avgAmplitudeAsOf ? `（截至 ${position.avgAmplitudeAsOf}）` : ''
+    return `最近 ${days} 个已收盘交易日 (最高-最低)/昨收 算术均值${asOf}`
+  }
+  return '暂无近 20 个已收盘交易日振幅数据'
 }
 
 /** 触发选中行事件，由父页面决定联动右栏还是路由跳转。 */
@@ -452,6 +464,22 @@ defineExpose({
                 {{ row.lastSellPrice ? formatSignedPercent(row.vsLastSellPct) : '—' }}
               </span>
             </div>
+
+            <el-tooltip placement="top" :show-after="200">
+              <template #content>
+                <div class="ap-quote-tip">
+                  <strong>近 20 日平均振幅</strong>
+                  <span>{{ amplitudeTooltipText(row) }}</span>
+                </div>
+              </template>
+              <div class="ap-price-row ap-amplitude-row">
+                <span class="ap-price-label">20日振</span>
+                <span class="ap-price-num ap-amplitude-spacer" aria-hidden="true" />
+                <span class="ap-price-pct ap-amplitude-val">
+                  {{ formatPercent(row.avgAmplitude20d) }}
+                </span>
+              </div>
+            </el-tooltip>
           </div>
         </div>
 
@@ -883,6 +911,10 @@ defineExpose({
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.ap-amplitude-val {
+  color: #475569;
 }
 
 .ap-row-refresh {

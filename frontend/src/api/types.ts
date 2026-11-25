@@ -283,6 +283,9 @@ export interface DashboardPosition extends Position {
   lastSellPrice?: string | null
   lastSellExecutedAt?: string | null
   vsLastSellPct?: string | null
+  avgAmplitude20d?: string | null
+  avgAmplitudeDays?: number | null
+  avgAmplitudeAsOf?: string | null
   needsRefresh?: boolean
 }
 
