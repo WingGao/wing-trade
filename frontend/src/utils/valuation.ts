@@ -106,6 +106,15 @@ export function computeReturnPct(pnl: DecimalValue | null, cost: DecimalValue | 
   return formatFixedDecimal({ digits: scaled, scale: 6 }, 6)
 }
 
+/** 计算当前价相对参考价的涨跌幅百分数 ((current - reference) / reference * 100)。 */
+export function computePriceDiffPct(
+  current: DecimalValue | null,
+  reference: DecimalValue | null,
+): string | null {
+  if (!current || !reference || current.digits <= 0n || reference.digits <= 0n) return null
+  return computeReturnPct(subDecimal(current, reference), reference)
+}
+
 /** 构造规范大写证券代码（如 SH:600519）。 */
 export function canonicalSymbolKey(market?: string | null, symbol?: string | null): string | null {
   const m = (market ?? '').trim().toUpperCase()
@@ -190,11 +199,14 @@ export function projectDashboardWithQuotes(
       }
     }
 
+    const vsLastSellPct = computePriceDiffPct(price, parseDecimal(pos.lastSellPrice))
+
     return {
       ...pos,
       quote: mergedQuote,
       unrealizedPnl: pnlDec ? formatFixedDecimal(pnlDec, 4) : null,
       unrealizedReturnPct: computeReturnPct(pnlDec, cost),
+      vsLastSellPct,
       lowestPriceGroup: lowestGroup,
     }
   })
@@ -318,6 +330,7 @@ export function projectLotsWithQuote(
     summary: {
       ...summary,
       unrealizedPnl: nextSummaryUnrealized,
+      vsLastSellPct: computePriceDiffPct(price, parseDecimal(summary.lastSellPrice)),
     },
   }
 }

@@ -153,7 +153,7 @@ test('编辑校验与版本冲突保留输入，成功后的列表失败独立�
 test('活动仓位持久提示复用重算，行情刷新和取消均不清标记', async ({ page }) => {
   const { state } = await mockTrading(page)
   await page.goto('/dashboard')
-  const row = page.locator('.position-table .el-table__row')
+  const row = page.locator('.ap-list .ap-row')
   await expect(row).toContainText('需要刷新')
   await page.screenshot({ path: 'test-results/trade-refresh-dashboard.png', fullPage: true, animations: 'disabled' })
   await page.getByRole('button', { name: '刷新行情', exact: true }).click()
@@ -174,21 +174,22 @@ test('活动仓位持久提示复用重算，行情刷新和取消均不清标�
   expect(state.recalculations[0]!.searchParams.get('accountId')).toBe(accountId)
   expect(state.recalculations[0]!.searchParams.get('strategyId')).toBe(strategyId)
   await expect(row).not.toContainText('需要刷新')
-  await expect(row.locator('.position-quantity')).toHaveText('200 股')
+  await expect(row.locator('.ap-sec-holding')).toContainText('200股')
 })
 
 test('无活动仓位仍有刷新入口，详情导航保留快照账户和策略', async ({ page }) => {
   const { state } = await mockTrading(page)
   state.noActiveRows = true
   await page.goto('/dashboard')
-  await expect(page.locator('.pending-refresh-scope')).toContainText('当前无活动仓位 · 需要刷新')
-  await page.locator('.pending-refresh-scope').getByRole('button', { name: '刷新持仓', exact: true }).click()
+  await expect(page.locator('.ap-pending-scope')).toContainText('当前无活动仓位 · 需要刷新')
+  await page.locator('.ap-pending-scope').getByRole('button', { name: '刷新持仓', exact: true }).click()
   await page.getByRole('button', { name: '确认重新计算', exact: true }).click()
-  await expect(page.locator('.pending-refresh-scope')).toHaveCount(0)
+  await expect(page.locator('.ap-pending-scope')).toHaveCount(0)
   state.noActiveRows = false
   state.dirty = true
   await page.reload()
-  await page.locator('.position-table .security-link').click()
+  await page.locator('.ap-list .ap-code-link').click()
+  await page.locator('.workspace-detail').getByRole('button', { name: '独立页打开' }).click()
   await expect(page).toHaveURL(new RegExp(`accountId=${accountId}.*strategyId=${strategyId}`))
   await expect.poll(() => state.lotsRequests.some((url) => url.searchParams.get('accountId') === accountId && url.searchParams.get('strategyId') === strategyId)).toBe(true)
   await expect(page.getByRole('button', { name: '刷新持仓', exact: true })).toBeVisible()
@@ -210,7 +211,7 @@ test('重算后的读取期间切换已结清条件，丢弃旧读取并立即�
     await route.fallback()
   })
   await page.goto('/dashboard')
-  await page.locator('.position-table .el-table__row').getByRole('button', { name: '刷新持仓', exact: true }).click()
+  await page.locator('.ap-list .ap-row').getByRole('button', { name: '刷新持仓', exact: true }).click()
   holdNextRead = true
   await page.getByRole('button', { name: '确认重新计算', exact: true }).click()
   await expect.poll(() => held !== null).toBe(true)

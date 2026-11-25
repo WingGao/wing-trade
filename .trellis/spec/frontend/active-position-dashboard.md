@@ -2,23 +2,20 @@
 
 ## 1. 适用范围
 
-适用于首页 `DashboardPage.vue` 的活动仓位表，以及其复用的 `QuoteBadge.vue` 紧凑展示模式。目标是保证持仓成本、当前估值、报价状态和涨幅排序在刷新、过期及缺行情时保持一致。
+适用于双端共享的活动仓位列表组件 `ActivePositionList.vue`（用于首页 `DashboardPage.vue` PC/移动端以及独立详情页 `SecurityDetailPage.vue` PC 左侧切换栏），以及 PC 端首页右侧联动的 `SecurityDetailPanel.vue`。
 
 ## 2. 签名
 
-- `QuoteBadge` 接收 `quote?: Quote | null`、`currency?: Currency | null`、`displayValue?: string | null`、`compact?: boolean`。
-- 活动仓位向 `QuoteBadge` 传入 `displayValue=currentPositionValue(row)` 与 `compact`，禁止在模板中重复拼接报价来源和时间。
-- 表格列使用 `prop="quote.changePct"`、`sortable="custom"`，默认排序为 `{ prop: 'quote.changePct', order: 'descending' }`。
-- `handlePositionSort({ prop, order })` 仅处理 `quote.changePct`；`order` 为 `ascending`、`descending` 或 `null`。
+- `ActivePositionList` 接收 `positions: DashboardPosition[]`、`totalOpenPositions: number`、`currency: Currency | null`、`accountId?: string`、`loading?: boolean`、`activeKey?: string | null`、`pendingScopes?: PositionRefreshScope[]`、`unlistedScopes?: PositionRefreshScope[]`，发出 `select(position)` 与 `recalculate(scope)` 事件。
+- 后端 `GET /api/v1/dashboard` 与 `GET /api/v1/securities/{id}/lots`（`summary`）均提供 `lastSellPrice`、`lastSellExecutedAt`、`vsLastSellPct`；口径为当前账户 + 证券 + 策略下全部历史有效卖出（`ACTIVE` `SELL`）的最近一笔（跨持仓周期）。
+- `valuation.ts` 的 `projectDashboardWithQuotes()` 与 `projectLotsWithQuote()` 在 SSE 实时推流更新现价时使用 `BigInt` 精确十进制重算 `vsLastSellPct`。
 
 ## 3. 契约
 
-- 持仓列标题为“持仓”。单元格第一行显示整数持股数并带“股”，第二行显示“加权成本 + 金额”，不得拆回两个重复列。
-- 当前价值列标题为“当前总价值”。第一行显示 `remainingQty * quote.lastPrice` 的展示值，保留两位小数；第二行依次显示三位现价、`changePct` 和报价状态。
-- 当前总价值仅用于展示。账务、持仓成本和浮盈仍以后端字段为准，不得将计算结果回写 API 或用本地排序结果替代服务端账务集合。
-- `QuoteBadge` 的紧凑模式必须隐藏常驻的报价来源/时间，并通过 `el-tooltip` 将“报价更新信息”挂在“实时/已过期/不可用”标签上。提示至少包含可用时的行情来源、报价时间、获取时间和当前单价。
-- 活动仓位默认按当前涨幅降序排列；点击“当前总价值”列头在降序和升序之间切换。无有效 `changePct` 的持仓必须在两种方向下都排在有效涨幅持仓之后。
-- “最低价批次合计”第二行使用紧凑文本：`x批`、整数股数加“股”、两位小数成本金额，三者用间距分隔；不再显示“合计剩余”或“成本”标签。
+- **双端统一三列布局**：左列为 `证券 / 持仓`（代码、名称、数量与加权均价），中列为 `总市值 / 浮盈`（总市值、总浮盈额与浮盈率、低批剩余数量与低批浮盈额），右列带左竖分割线并纵向对齐三行：`现价`（最新价 + 当日涨跌幅，悬停显示报价更新信息 tooltip）、`低批`（最低价批次买入价 + 相对涨跌幅）、`上卖`（上次卖出价 + 相对涨跌幅，无卖出显示 `暂无卖出` 与 `—`）。
+- **筛选与搜索**：顶部提供 `全部 / 低批盈利 / 低于上卖 / 浮亏仓位` 四个带数量角标的筛选标签、本地 `代码 / 名称` 搜索框以及右上角 `紧凑` 视图切换按钮。
+- **五维正反排序**：默认按「现价（当日涨跌幅 `quote.changePct`）」降序；表头「总市值」「浮盈」「现价」「低批」「上卖」5 个标题均可独立点击正反切换排序（无“取消排序”第三态），任意排序维度与方向下缺失值始终排在末尾。
+- **PC 端主从联动**：PC 端首页右侧空余区域直接内嵌 `SecurityDetailPanel` 展示当前选中仓位的个股详情，默认选中当前排序第一只持仓；点击左侧仓位即时切换右侧详情，右侧写入操作完成后同步刷新左侧仓位快照。
 
 ## 4. 校验与状态矩阵
 

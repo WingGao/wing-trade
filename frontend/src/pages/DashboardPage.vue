@@ -8,12 +8,14 @@ import { useLedgerStore } from '../stores/ledger'
 import { usePreferencesStore } from '../stores/preferences'
 import { useQuotesStore } from '../stores/quotes'
 import { api } from '../api/client'
+import ActivePositionList from '../components/ActivePositionList.vue'
+import SecurityDetailPanel from '../components/SecurityDetailPanel.vue'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
-import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, isFundSecurity, marketSessionLabel, priceDigits, quantityUnit, trendClass, valuationStatusLabel } from '../utils/format'
-import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
+import { formatDateTime, formatMoney, formatPercent, isFundSecurity, marketSessionLabel, trendClass, valuationStatusLabel } from '../utils/format'
+import { refreshPosition } from '../utils/recalculate'
 import { projectDashboardWithQuotes } from '../utils/valuation'
 import { useViewport } from '../utils/viewport'
 
@@ -27,7 +29,7 @@ const dashboard = computed(() =>
   ledger.dashboard ? projectDashboardWithQuotes(ledger.dashboard, quotesStore.quotesMap) : null,
 )
 const positions = computed(() => dashboard.value?.positions ?? [])
-const positionSortOrder = ref<'ascending' | 'descending'>('descending')
+const selectedPositionKey = ref<string | null>(null)
 const streamStatusText = computed(() => {
   if (quotesStore.connectionState === 'live') return '实时推送中'
   if (quotesStore.connectionState === 'reconnecting') return '行情重连中'
@@ -58,6 +60,7 @@ const pageAlive = ref(false)
 const manualRefreshing = ref(false)
 const activeMutations = ref(0)
 const mutationActive = computed(() => activeMutations.value > 0)
+
 /** 合并服务端待刷新清单与行状态，旧响应仍可按行提供入口。 */
 const pendingScopes = computed(() => {
   const scopes = new Map<string, PositionRefreshScope>()
@@ -70,50 +73,58 @@ const pendingScopes = computed(() => {
   }
   return [...scopes.values()]
 })
-const unlistedScopes = computed(() => pendingScopes.value.filter((scope) => !positions.value.some((position) => position.securityId === scope.securityId && position.strategyId === scope.strategyId)))
+const unlistedScopes = computed(() =>
+  pendingScopes.value.filter(
+    (scope) => !positions.value.some((position) => position.securityId === scope.securityId && position.strategyId === scope.strategyId),
+  ),
+)
 const selectedAccount = computed(() => accounts.value.find((account) => account.id === selectedAccountId.value))
 const accountMatchesSecurity = computed(() => !selectedSecurity.value || selectedAccount.value?.currency === requiredCurrency.value)
 const requiredCurrency = computed<'CNY' | 'USD'>(() => selectedSecurity.value?.currency ?? (selectedSecurity.value?.market === 'US' ? 'USD' : 'CNY'))
 
-/** 读取当前涨幅用于排序，无有效行情时返回空值。 */
-function positionChangeValue(position: DashboardPosition): number | null {
-  const value = Number(position.quote?.changePct)
-  return Number.isFinite(value) ? value : null
+/** 构造持仓行的稳定唯一键。 */
+function positionKey(position: DashboardPosition): string {
+  return `${position.securityId}|${position.strategyId}`
 }
 
-/** 按当前涨幅排列活动仓位，并将无有效行情的持仓始终放在末尾。 */
-const sortedPositions = computed(() => {
-  const direction = positionSortOrder.value === 'ascending' ? 1 : -1
-  return [...positions.value].sort((left, right) => {
-    const leftChange = positionChangeValue(left)
-    const rightChange = positionChangeValue(right)
-    if (leftChange === null && rightChange === null) return 0
-    if (leftChange === null) return 1
-    if (rightChange === null) return -1
-    return (leftChange - rightChange) * direction
-  })
+/** 按默认当日涨幅降序挑出首个可展示详情的持仓（缺行情置后）。 */
+function pickDefaultDetailPosition(list: DashboardPosition[]): DashboardPosition | null {
+  const candidates = [...list]
+    .filter((item) => Boolean(item.market && item.symbol))
+    .sort((left, right) => {
+      const leftVal = Number(left.quote?.changePct)
+      const rightVal = Number(right.quote?.changePct)
+      const leftValid = Number.isFinite(leftVal)
+      const rightValid = Number.isFinite(rightVal)
+      if (!leftValid && !rightValid) return 0
+      if (!leftValid) return 1
+      if (!rightValid) return -1
+      return rightVal - leftVal
+    })
+  return candidates[0] ?? null
+}
+
+/** 当前 PC 右栏联动展示的个股持仓对象。 */
+const activeDetailPosition = computed<DashboardPosition | null>(() => {
+  if (!positions.value.length) return null
+  if (selectedPositionKey.value) {
+    const matched = positions.value.find((item) => positionKey(item) === selectedPositionKey.value && item.market && item.symbol)
+    if (matched) return matched
+  }
+  return pickDefaultDetailPosition(positions.value)
 })
 
-/** 接收表格列排序变化并切换当前涨幅排序方向。 */
-function handlePositionSort({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
-  if (prop !== 'quote.changePct') return
-  positionSortOrder.value = order === 'ascending' ? 'ascending' : 'descending'
-}
+const effectiveSelectedKey = computed<string | null>(() =>
+  activeDetailPosition.value ? positionKey(activeDetailPosition.value) : null,
+)
 
-/** 移动端点击排序头在当前涨幅降序与升序之间切换。 */
-function togglePositionSortOrder(): void {
-  positionSortOrder.value = positionSortOrder.value === 'descending' ? 'ascending' : 'descending'
-}
-
-/** 按当前持仓数量和最新报价计算展示用总价值，缺少有效行情时返回空值。 */
-function currentPositionValue(position: DashboardPosition): string | null {
-  const price = position.quote?.lastPrice
-  if (price === null || price === undefined || price === '') return null
-  const quantity = Number(position.remainingQty)
-  const latestPrice = Number(price)
-  if (!Number.isFinite(quantity) || !Number.isFinite(latestPrice)) return null
-  const value = quantity * latestPrice
-  return Number.isFinite(value) ? value.toFixed(2) : null
+/** 在 PC 端点击左侧活动仓位时，切换右侧详情面板展示的目标持仓。 */
+function selectDesktopPosition(position: DashboardPosition): void {
+  if (!position.market || !position.symbol) {
+    void openPosition(position)
+    return
+  }
+  selectedPositionKey.value = positionKey(position)
 }
 
 let pollTimer: number | null = null
@@ -330,7 +341,7 @@ async function createAccountForCurrency(currency: 'CNY' | 'USD') {
   }
 }
 
-/** 记账成功后重载整份估值，同时保留“显示已结清”和当前批次选择。 */
+/** 记账或右侧详情变更成功后重载整份估值，同时保留“显示已结清”和当前批次选择。 */
 async function reloadQuickTrade() {
   ledger.invalidateDashboard()
   await loadValuation('auto', false, true, true)
@@ -339,7 +350,7 @@ async function reloadQuickTrade() {
   }
 }
 
-/** 根据持仓内置证券标识打开详情页，不再依赖独立行情状态。 */
+/** 根据持仓内置证券标识打开独立个股详情页，不再依赖独立行情状态。 */
 async function openPosition(position: DashboardPosition) {
   const account = dashboard.value?.accountId
   if (position.market && position.symbol) {
@@ -350,11 +361,6 @@ async function openPosition(position: DashboardPosition) {
   const security = securities.find((item) => item.id === position.securityId)
   if (security && pageAlive.value && account === dashboard.value?.accountId) router.push({ path: `/security/${security.market}/${security.symbol}`, query: { accountId: account, strategyId: position.strategyId } })
   else ElMessage.warning('找不到证券基础信息')
-}
-
-/** 将行操作绑定看板快照账户，而不是快速记账选择器中的账户。 */
-function rowScope(position: DashboardPosition): PositionRefreshScope {
-  return { accountId: dashboard.value?.accountId ?? '', securityId: position.securityId, strategyId: position.strategyId, market: position.market, symbol: position.symbol, name: position.name }
 }
 
 /** 在刷新前后失效旧读取，统一处理确认、防重和服务端状态重读。 */
@@ -371,7 +377,6 @@ async function recalculate(scope: PositionRefreshScope) {
       ledger.invalidateDashboard()
     },
     reload: async () => {
-      // 过滤条件变化只替代读取，不取消已提交的重算；稳定后再报告读取结果。
       while (pageAlive.value && account === dashboard.value?.accountId) {
         const query = queryGeneration
         const result = await loadValuation('auto', false, false, true)
@@ -394,6 +399,7 @@ watch(() => accountsStore.activeAccountId, (nextAccountId) => {
   if (!nextAccountId) return
   if (!selectedSecurity.value) selectedAccountId.value = nextAccountId
   if (!pageAlive.value || nextAccountId === dashboard.value?.accountId) return
+  selectedPositionKey.value = null
   queryGeneration += 1
   ledger.invalidateDashboard()
   void loadValuation('auto')
@@ -436,103 +442,102 @@ onBeforeUnmount(() => {
 
 <template>
   <template v-if="!isMobile">
-  <section class="page-head">
-    <div><h2>账户总览</h2><p class="muted">以真实交易流水为准，价格、浮盈和汇总来自同一次估值响应。</p></div>
-    <div class="toolbar">
-      <el-tag v-if="streamStatusText" :type="quotesStore.isLive ? 'success' : 'warning'" effect="plain">{{ streamStatusText }}</el-tag>
-      <el-tag v-if="marketSessionText" :type="dashboard?.marketSessionOpen ? 'success' : 'info'" effect="plain">{{ marketSessionText }}</el-tag>
-      <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
-      <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
-      <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
-      <el-button type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新行情</el-button>
-    </div>
-  </section>
-
-  <el-alert v-if="ledger.error" :title="`估值刷新失败：${ledger.error}。账务记录仍可正常使用。`" type="error" show-icon :closable="false" class="status-alert" />
-  <el-alert v-if="dashboard" :title="valuationMessage" :type="statusAlertType(valuationStatus)" show-icon :closable="false" class="status-alert" />
-
-  <el-card class="panel quick-trade">
-    <template #header><div class="panel-title">快速记账</div></template>
-    <div class="search-row">
-      <el-input v-model="securityKeyword" placeholder="输入证券代码、名称，例如 600519" clearable @keyup.enter="searchSecurities" />
-      <el-button type="primary" :loading="searching" @click="searchSecurities">查找证券</el-button>
-      <el-select v-if="accounts.length" v-model="selectedAccountId" style="width:190px" placeholder="选择账户"><el-option v-for="account in accounts" :key="account.id" :label="`${account.name} (${account.currency})`" :value="account.id" /></el-select>
-      <el-button v-if="selectedSecurity" :disabled="!accountMatchesSecurity" @click="buyVisible = true">买入记账</el-button>
-      <el-button v-if="selectedSecurity" type="danger" :disabled="!accountMatchesSecurity || !selectedLots.length" @click="sellVisible = true">卖出配对</el-button>
-      <el-button v-if="selectedSecurity && !accounts.some((item) => item.currency === requiredCurrency)" @click="createAccountForCurrency(requiredCurrency)">创建 {{ requiredCurrency }} 账户</el-button>
-    </div>
-    <div v-if="securityResults.length" class="security-results">
-      <button v-for="security in securityResults" :key="`${security.market}:${security.symbol}`" class="security-option" type="button" @click="chooseSecurity(security)"><strong>{{ security.market }}:{{ security.symbol }}</strong><span>{{ security.name ?? '名称不可用' }}</span></button>
-    </div>
-    <el-alert v-if="searchError" :title="searchError" type="warning" :closable="false" class="status-alert" />
-    <div v-if="searched && !searching && securityKeyword && !securityResults.length && !selectedSecurity" class="security-create">
-      <span class="muted">本地证券库暂无匹配项，可先新增：</span>
-      <el-select v-model="marketChoice" style="width:108px"><el-option label="A股" value="CN" /><el-option label="场外基金" value="OF" /><el-option label="美股" value="US" /></el-select>
-      <el-input v-model="securityName" placeholder="证券名称" />
-      <el-button type="success" @click="createSecurity">新增证券</el-button>
-    </div>
-    <div v-if="selectedSecurity" class="selected-security">
-      当前证券：<strong>{{ selectedSecurity.market }}:{{ selectedSecurity.symbol }}</strong> {{ selectedSecurity.name ?? '' }}
-      <span v-if="!accountMatchesSecurity" class="currency-warning">当前账户为 {{ selectedAccount?.currency ?? '未选择' }}，请选择 {{ requiredCurrency }} 账户</span>
-      <span v-else-if="!selectedLots.length" class="muted">暂无未结清批次，可直接录入买入</span>
-    </div>
-  </el-card>
-
-  <div class="metric-grid dashboard-metrics">
-    <el-card class="metric-card"><span class="metric-label">持仓总价值</span><div class="metric-value">{{ marketValue }}</div><div class="metric-detail">{{ valuationStatus === 'stale' ? '参考估值 · 行情已过期' : '按当前持仓与同次行情估值' }}</div></el-card>
-    <el-card class="metric-card"><span class="metric-label">累计买入现金流</span><div class="metric-value">{{ formatMoney(dashboard?.summary.totalBuyCashOut, dashboardCurrency) }}</div></el-card>
-    <el-card class="metric-card"><span class="metric-label">累计卖出回款</span><div class="metric-value">{{ formatMoney(dashboard?.summary.totalSellCashIn, dashboardCurrency) }}</div></el-card>
-    <el-card class="metric-card"><span class="metric-label">已实现收益</span><div :class="['metric-value', trendClass(dashboard?.summary.realizedPnl)]">{{ formatMoney(dashboard?.summary.realizedPnl, dashboardCurrency) }}</div></el-card>
-    <el-card class="metric-card">
-      <span class="metric-label">账户未实现浮盈（参考）</span>
-      <div :class="['metric-value', trendClass(dashboard?.summary.unrealizedPnl)]">{{ unrealizedValue }}</div>
-      <div class="metric-detail">{{ unrealizedRate }} · 未扣预计卖出费用</div>
-    </el-card>
-  </div>
-
-  <el-card class="panel">
-    <template #header><div class="panel-title">活动仓位 <span class="muted">{{ dashboard?.summary.totalOpenPositions ?? 0 }} 个未结清持仓</span></div></template>
-    <el-alert v-if="pendingScopes.length" type="warning" :closable="false" show-icon class="status-alert" title="需要刷新：部分交易流水已更正，相关持仓、收益及账户汇总尚未重新核算。" />
-    <div v-for="scope in unlistedScopes" :key="`${scope.accountId}|${scope.securityId}|${scope.strategyId}`" class="pending-refresh-scope">
-      <span><strong>{{ scope.market }}:{{ scope.symbol }}</strong> {{ scope.name ?? '' }} · 当前无活动仓位 · 需要刷新</span>
-      <el-button type="warning" :loading="isPositionRefreshing(scope)" @click="recalculate(scope)">刷新持仓</el-button>
-    </div>
-    <el-table :data="sortedPositions" :default-sort="{ prop: 'quote.changePct', order: 'descending' }" v-loading="ledger.loading" stripe empty-text="暂无持仓" class="position-table" @sort-change="handlePositionSort">
-      <el-table-column label="证券" min-width="180">
-        <template #default="{ row }"><a class="security-link" href="#" @click.prevent="openPosition(row)"><strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong><span v-if="row.name" class="position-name">{{ row.name }}</span></a></template>
-      </el-table-column>
-      <el-table-column label="持仓" min-width="150">
-        <template #default="{ row }"><div class="position-holding"><strong class="position-quantity">{{ formatQuantity(row.remainingQty, row) }} {{ quantityUnit(row) }}</strong><span class="position-cost">加权成本 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</span></div></template>
-      </el-table-column>
-      <el-table-column prop="quote.changePct" label="当前总价值" min-width="220" sortable="custom" :sort-orders="['descending', 'ascending']"><template #default="{ row }"><QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact /></template></el-table-column>
-      <el-table-column label="持仓浮盈" min-width="135">
-        <template #default="{ row }"><div :class="['pnl-value', trendClass(row.unrealizedPnl)]">{{ formatMoney(row.unrealizedPnl, row.currency ?? dashboardCurrency) }}</div><div :class="['pnl-rate', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</div></template>
-      </el-table-column>
-      <el-table-column label="最低价批次合计" min-width="235">
-        <template #default="{ row }">
-          <div v-if="row.lowestPriceGroup" class="lowest-group">
-            <div>共同买入价 <strong>{{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</strong></div>
-            <div class="lowest-group-meta"><span>{{ row.lowestPriceGroup.lotCount }}批</span><span>{{ formatQuantity(row.lowestPriceGroup.remainingQty, row) }}{{ quantityUnit(row) }}</span><span>{{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}</span></div>
-            <div :class="['group-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">组浮盈 {{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</div>
-          </div>
-          <span v-else class="muted">无符合条件的未结清批次</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="策略回本参考价" min-width="135"><template #default="{ row }">{{ formatMoney(row.strategyBreakevenPrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</template></el-table-column>
-      <el-table-column label="持仓核算" width="150" fixed="right"><template #default="{ row }"><div v-if="row.needsRefresh"><el-tag type="warning">需要刷新</el-tag><el-button link type="warning" :loading="isPositionRefreshing(rowScope(row))" @click="recalculate(rowScope(row))">刷新持仓</el-button></div><span v-else class="muted">—</span></template></el-table-column>
-    </el-table>
-  </el-card>
-
-  <el-card class="panel">
-    <template #header><div class="panel-title">自选股行情</div></template>
-    <div class="quote-grid">
-      <div v-for="quote in dashboard?.quotes ?? []" :key="quote.symbol" class="quote-card">
-        <div class="quote-symbol">{{ quote.symbol }}</div>
-        <QuoteBadge :quote="quote" :currency="quote.currency ?? dashboardCurrency" />
+    <section class="page-head">
+      <div><h2>账户总览</h2><p class="muted">以真实交易流水为准，价格、浮盈和汇总来自同一次估值响应。</p></div>
+      <div class="toolbar">
+        <el-tag v-if="streamStatusText" :type="quotesStore.isLive ? 'success' : 'warning'" effect="plain">{{ streamStatusText }}</el-tag>
+        <el-tag v-if="marketSessionText" :type="dashboard?.marketSessionOpen ? 'success' : 'info'" effect="plain">{{ marketSessionText }}</el-tag>
+        <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
+        <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
+        <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
+        <el-button type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新行情</el-button>
       </div>
-      <div v-if="!dashboard?.quotes.length" class="empty">暂无自选股行情</div>
+    </section>
+
+    <el-alert v-if="ledger.error" :title="`估值刷新失败：${ledger.error}。账务记录仍可正常使用。`" type="error" show-icon :closable="false" class="status-alert" />
+    <el-alert v-if="dashboard" :title="valuationMessage" :type="statusAlertType(valuationStatus)" show-icon :closable="false" class="status-alert" />
+
+    <el-card class="panel quick-trade">
+      <template #header><div class="panel-title">快速记账</div></template>
+      <div class="search-row">
+        <el-input v-model="securityKeyword" placeholder="输入证券代码、名称，例如 600519" clearable @keyup.enter="searchSecurities" />
+        <el-button type="primary" :loading="searching" @click="searchSecurities">查找证券</el-button>
+        <el-select v-if="accounts.length" v-model="selectedAccountId" style="width:190px" placeholder="选择账户"><el-option v-for="account in accounts" :key="account.id" :label="`${account.name} (${account.currency})`" :value="account.id" /></el-select>
+        <el-button v-if="selectedSecurity" :disabled="!accountMatchesSecurity" @click="buyVisible = true">买入记账</el-button>
+        <el-button v-if="selectedSecurity" type="danger" :disabled="!accountMatchesSecurity || !selectedLots.length" @click="sellVisible = true">卖出配对</el-button>
+        <el-button v-if="selectedSecurity && !accounts.some((item) => item.currency === requiredCurrency)" @click="createAccountForCurrency(requiredCurrency)">创建 {{ requiredCurrency }} 账户</el-button>
+      </div>
+      <div v-if="securityResults.length" class="security-results">
+        <button v-for="security in securityResults" :key="`${security.market}:${security.symbol}`" class="security-option" type="button" @click="chooseSecurity(security)"><strong>{{ security.market }}:{{ security.symbol }}</strong><span>{{ security.name ?? '名称不可用' }}</span></button>
+      </div>
+      <el-alert v-if="searchError" :title="searchError" type="warning" :closable="false" class="status-alert" />
+      <div v-if="searched && !searching && securityKeyword && !securityResults.length && !selectedSecurity" class="security-create">
+        <span class="muted">本地证券库暂无匹配项，可先新增：</span>
+        <el-select v-model="marketChoice" style="width:108px"><el-option label="A股" value="CN" /><el-option label="场外基金" value="OF" /><el-option label="美股" value="US" /></el-select>
+        <el-input v-model="securityName" placeholder="证券名称" />
+        <el-button type="success" @click="createSecurity">新增证券</el-button>
+      </div>
+      <div v-if="selectedSecurity" class="selected-security">
+        当前证券：<strong>{{ selectedSecurity.market }}:{{ selectedSecurity.symbol }}</strong> {{ selectedSecurity.name ?? '' }}
+        <span v-if="!accountMatchesSecurity" class="currency-warning">当前账户为 {{ selectedAccount?.currency ?? '未选择' }}，请选择 {{ requiredCurrency }} 账户</span>
+        <span v-else-if="!selectedLots.length" class="muted">暂无未结清批次，可直接录入买入</span>
+      </div>
+    </el-card>
+
+    <div class="metric-grid dashboard-metrics">
+      <el-card class="metric-card"><span class="metric-label">持仓总价值</span><div class="metric-value">{{ marketValue }}</div><div class="metric-detail">{{ valuationStatus === 'stale' ? '参考估值 · 行情已过期' : '按当前持仓与同次行情估值' }}</div></el-card>
+      <el-card class="metric-card"><span class="metric-label">累计买入现金流</span><div class="metric-value">{{ formatMoney(dashboard?.summary.totalBuyCashOut, dashboardCurrency) }}</div></el-card>
+      <el-card class="metric-card"><span class="metric-label">累计卖出回款</span><div class="metric-value">{{ formatMoney(dashboard?.summary.totalSellCashIn, dashboardCurrency) }}</div></el-card>
+      <el-card class="metric-card"><span class="metric-label">已实现收益</span><div :class="['metric-value', trendClass(dashboard?.summary.realizedPnl)]">{{ formatMoney(dashboard?.summary.realizedPnl, dashboardCurrency) }}</div></el-card>
+      <el-card class="metric-card">
+        <span class="metric-label">账户未实现浮盈（参考）</span>
+        <div :class="['metric-value', trendClass(dashboard?.summary.unrealizedPnl)]">{{ unrealizedValue }}</div>
+        <div class="metric-detail">{{ unrealizedRate }} · 未扣预计卖出费用</div>
+      </el-card>
     </div>
-  </el-card>
+
+    <div class="dashboard-workspace">
+      <div class="workspace-positions">
+        <ActivePositionList
+          :positions="positions"
+          :total-open-positions="dashboard?.summary.totalOpenPositions ?? 0"
+          :currency="dashboardCurrency"
+          :account-id="dashboard?.accountId ?? ''"
+          :loading="ledger.loading"
+          :active-key="effectiveSelectedKey"
+          :pending-scopes="pendingScopes"
+          :unlisted-scopes="unlistedScopes"
+          @select="selectDesktopPosition"
+          @recalculate="recalculate"
+        />
+      </div>
+      <div class="workspace-detail">
+        <SecurityDetailPanel
+          v-if="activeDetailPosition?.market && activeDetailPosition?.symbol"
+          :market="activeDetailPosition.market"
+          :symbol="activeDetailPosition.symbol"
+          :account-id="dashboard?.accountId"
+          :strategy-id="activeDetailPosition.strategyId"
+          embedded
+          @mutated="reloadQuickTrade"
+          @open-standalone="openPosition(activeDetailPosition)"
+        />
+        <el-card v-else class="panel workspace-empty-card">
+          <div class="empty">暂无活动持仓，可在上方快速记账中录入买入后查看个股详情</div>
+        </el-card>
+      </div>
+    </div>
+
+    <el-card class="panel">
+      <template #header><div class="panel-title">自选股行情</div></template>
+      <div class="quote-grid">
+        <div v-for="quote in dashboard?.quotes ?? []" :key="quote.symbol" class="quote-card">
+          <div class="quote-symbol">{{ quote.symbol }}</div>
+          <QuoteBadge :quote="quote" :currency="quote.currency ?? dashboardCurrency" />
+        </div>
+        <div v-if="!dashboard?.quotes.length" class="empty">暂无自选股行情</div>
+      </div>
+    </el-card>
   </template>
 
   <template v-else>
@@ -616,57 +621,19 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section class="m-section m-positions" v-loading="ledger.loading">
-      <div class="m-section-head">
-        <span>活动仓位</span>
-        <span class="m-section-sub">{{ dashboard?.summary.totalOpenPositions ?? 0 }} 个未结清持仓</span>
-      </div>
-      <div v-if="pendingScopes.length" class="m-compact-note is-warning">需要刷新：部分交易流水已更正，相关持仓、收益及账户汇总尚未重新核算。</div>
-      <div v-for="scope in unlistedScopes" :key="`${scope.accountId}|${scope.securityId}|${scope.strategyId}`" class="m-pending-scope">
-        <span class="m-pending-text"><strong>{{ scope.market }}:{{ scope.symbol }}</strong> {{ scope.name ?? '' }} · 无活动仓位 · 待刷新</span>
-        <el-button size="small" type="warning" :loading="isPositionRefreshing(scope)" @click="recalculate(scope)">刷新持仓</el-button>
-      </div>
-      <div class="m-pos-header">
-        <span>证券 / 持仓</span>
-        <button type="button" class="m-sort-btn" @click="togglePositionSortOrder">
-          当前总价值 <span aria-hidden="true">{{ positionSortOrder === 'descending' ? '↓' : '↑' }}</span>
-        </button>
-        <span class="m-align-right">持仓浮盈</span>
-      </div>
-      <div v-if="sortedPositions.length" class="m-position-list">
-        <article v-for="row in sortedPositions" :key="`${row.securityId}|${row.strategyId}`" class="m-pos-item">
-          <div class="m-pos-main">
-            <div class="m-pos-col-sec">
-              <a class="m-pos-link" href="#" @click.prevent="openPosition(row)">
-                <strong>{{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}</strong>
-                <span v-if="row.name" class="m-pos-name">{{ row.name }}</span>
-              </a>
-              <div class="m-pos-holding num">{{ formatQuantity(row.remainingQty, row) }}{{ quantityUnit(row) }} · 均 {{ formatMoney(row.averageCost, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }}</div>
-            </div>
-            <div class="m-pos-col-quote">
-              <QuoteBadge :quote="row.quote" :currency="row.currency ?? dashboardCurrency" :display-value="currentPositionValue(row)" compact />
-            </div>
-            <div class="m-pos-col-pnl">
-              <div :class="['m-pos-pnl', 'num', trendClass(row.unrealizedPnl)]">{{ formatMoney(row.unrealizedPnl, row.currency ?? dashboardCurrency) }}</div>
-              <div :class="['m-pos-rate', 'num', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</div>
-            </div>
-          </div>
-          <div class="m-pos-foot">
-            <div class="m-pos-lowest num">
-              <template v-if="row.lowestPriceGroup">
-                最低批 {{ formatMoney(row.lowestPriceGroup.purchasePrice, row.currency ?? dashboardCurrency, priceDigits(row, 2)) }} · {{ row.lowestPriceGroup.lotCount }}批 {{ formatQuantity(row.lowestPriceGroup.remainingQty, row) }}{{ quantityUnit(row) }} {{ formatDecimal(row.lowestPriceGroup.remainingCost, 2) }}
-              </template>
-              <span v-else class="m-section-sub">无最低批</span>
-            </div>
-            <div v-if="row.lowestPriceGroup || row.needsRefresh" class="m-pos-foot-right">
-              <span v-if="row.lowestPriceGroup" :class="['m-pos-group-pnl', 'num', trendClass(row.lowestPriceGroup.unrealizedPnl)]">{{ formatMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? dashboardCurrency) }} / {{ formatPercent(row.lowestPriceGroup.unrealizedReturnPct) }}</span>
-              <el-button v-if="row.needsRefresh" size="small" type="warning" plain :loading="isPositionRefreshing(rowScope(row))" @click="recalculate(rowScope(row))">刷新持仓</el-button>
-            </div>
-          </div>
-        </article>
-      </div>
-      <div v-else class="m-empty">暂无持仓</div>
-    </section>
+    <div class="m-positions-wrap">
+      <ActivePositionList
+        :positions="positions"
+        :total-open-positions="dashboard?.summary.totalOpenPositions ?? 0"
+        :currency="dashboardCurrency"
+        :account-id="dashboard?.accountId ?? ''"
+        :loading="ledger.loading"
+        :pending-scopes="pendingScopes"
+        :unlisted-scopes="unlistedScopes"
+        @select="openPosition"
+        @recalculate="recalculate"
+      />
+    </div>
 
     <section class="m-section">
       <div class="m-section-head"><span>自选股行情</span></div>
@@ -687,11 +654,48 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dashboard-metrics { grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
-.pending-refresh-scope { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; flex-wrap: wrap; }
-.position-holding { display: flex; flex-direction: column; gap: 3px; line-height: 1.45; }
-.position-quantity { color: #263244; }
-.position-cost { color: #7d899b; font-size: 12px; }
-.lowest-group-meta { display: flex; gap: 12px; margin: 2px 0; color: #7d899b; font-size: 12px; white-space: nowrap; }
+.dashboard-workspace {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.workspace-positions {
+  flex: 0 0 520px;
+  width: 520px;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+.workspace-detail {
+  flex: 1;
+  min-width: 0;
+}
+.workspace-empty-card {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+@media (min-width: 769px) and (max-width: 1360px) {
+  .workspace-positions {
+    flex: 0 0 460px;
+    width: 460px;
+  }
+}
+@media (min-width: 769px) and (max-width: 1120px) {
+  .dashboard-workspace {
+    flex-direction: column;
+  }
+  .workspace-positions {
+    position: static;
+    width: 100%;
+    flex: none;
+    max-height: none;
+  }
+}
+.m-positions-wrap { margin-bottom: 8px; }
 .m-dash-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 10px; border-bottom: 1px solid #edf0f5; flex-wrap: wrap; }
 .m-dash-actions { display: flex; align-items: center; gap: 6px; }
 .m-summary-top { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #edf0f5; }
@@ -718,28 +722,6 @@ onBeforeUnmount(() => {
 .m-currency-warn { color: #d99014; font-size: 11px; }
 .m-selected-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .m-account-select { flex: 1; min-width: 130px; }
-.m-pending-scope { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: #fffbf2; border-bottom: 1px solid #f5e6c8; font-size: 11px; }
-.m-pending-text { min-width: 0; overflow-wrap: anywhere; }
-.m-pos-header { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: 6px; align-items: center; padding: 6px 10px; background: #f8fafc; border-bottom: 1px solid #edf0f5; font-size: 11px; font-weight: 600; color: #64748b; }
-.m-sort-btn { justify-self: end; border: 0; background: transparent; padding: 0; font-size: 11px; font-weight: 700; color: #2563eb; cursor: pointer; display: inline-flex; align-items: center; gap: 2px; }
-.m-align-right { text-align: right; }
-.m-position-list { display: flex; flex-direction: column; }
-.m-pos-item { border-bottom: 1px solid #e9edf3; }
-.m-pos-item:last-child { border-bottom: 0; }
-.m-pos-main { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr) minmax(0, 0.85fr); gap: 6px; align-items: start; padding: 8px 10px 6px; }
-.m-pos-col-sec { min-width: 0; }
-.m-pos-link { display: flex; flex-direction: column; text-decoration: none; color: #1d4ed8; font-size: 13px; line-height: 1.25; }
-.m-pos-name { font-size: 11px; font-weight: 400; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.m-pos-holding { margin-top: 3px; font-size: 11px; color: #475569; line-height: 1.3; }
-.m-pos-col-quote { min-width: 0; display: flex; justify-content: flex-end; text-align: right; }
-.m-pos-col-quote :deep(.quote-value-row--compact) { justify-content: flex-end; }
-.m-pos-col-pnl { min-width: 0; text-align: right; }
-.m-pos-pnl { font-size: 13px; font-weight: 700; line-height: 1.25; }
-.m-pos-rate { font-size: 11px; margin-top: 2px; }
-.m-pos-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding: 5px 10px 7px; background: #fafbfd; border-top: 1px dashed #edf0f5; font-size: 11px; color: #5b687c; line-height: 1.35; }
-.m-pos-lowest { min-width: 0; flex: 1; }
-.m-pos-foot-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: auto; }
-.m-pos-group-pnl { font-weight: 600; white-space: nowrap; }
 .m-quote-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; }
 .m-quote-card { padding: 8px; border: 1px solid #edf0f4; border-radius: 6px; background: #fff; min-width: 0; }
 .m-quote-symbol { font-size: 12px; font-weight: 700; margin-bottom: 4px; color: #182230; }

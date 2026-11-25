@@ -90,6 +90,26 @@ export function formatMoney(value: string | null | undefined, currency: Currency
   return `${symbol} ${formatted}`.trim()
 }
 
+/** 将金额按紧凑格式输出（符号紧贴数字，如 ¥25,640.00），适合高密度列表展示。 */
+export function formatCompactMoney(value: string | null | undefined, currency: Currency | null | undefined, digits = 2): string {
+  const formatted = formatDecimal(value, digits)
+  if (formatted === '—') return formatted
+  const symbol = currency === 'USD' ? '$' : currency === 'CNY' ? '¥' : ''
+  return `${symbol}${formatted}`
+}
+
+/** 将盈亏金额按带符号紧凑格式输出（如 +¥360.00 / -¥355.00），缺失值返回破折号。 */
+export function formatSignedMoney(value: string | null | undefined, currency: Currency | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || value === '') return '—'
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return '—'
+  const absFormatted = formatDecimal(String(Math.abs(parsed)), digits)
+  if (absFormatted === '—') return '—'
+  const symbol = currency === 'USD' ? '$' : currency === 'CNY' ? '¥' : ''
+  const sign = parsed > 0 ? '+' : parsed < 0 ? '-' : ''
+  return `${sign}${symbol}${absFormatted}`
+}
+
 /** 基金份额按 2 至 4 位小数展示，美股或含小数股数保留最多 4 位有效小数，A 股整数股按整数展示。 */
 export function formatQuantity(
   value: string | null | undefined,

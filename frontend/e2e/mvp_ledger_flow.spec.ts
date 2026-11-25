@@ -198,12 +198,12 @@ test.describe('portfolio journal dashboard', () => {
     })
 
     await page.goto('/dashboard')
-    const row = page.locator('.position-table .el-table__row').filter({ hasText: 'SH:600519' })
-    await expect(row).toContainText('¥ 8.00')
-    await expect(row).toContainText('-200.00')
-    await expect(row).toContainText('¥ 10.00')
-    await expect(row).toContainText('¥ 0.00')
-    await expect(row.locator('.lowest-group-meta')).toHaveText('2批150股1,200.00')
+    const row = page.locator('.ap-list .ap-row').filter({ hasText: 'SH:600519' })
+    await expect(row).toContainText('8.000')
+    await expect(row).toContainText('-¥200.00')
+    await expect(row).toContainText('10.000')
+    await expect(row).toContainText('¥0.00')
+    await expect(row.locator('.ap-lowest-line')).toContainText('低批 150股')
     expect(modes.slice(0, 2)).toEqual(['cache', 'auto'])
   })
 
@@ -280,13 +280,13 @@ test.describe('portfolio journal dashboard', () => {
     await page.route('**/api/v1/dashboard**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(makeDashboard({ positions, quotes: positions.flatMap((position) => position.quote ? [position.quote] : []) })) }))
 
     await page.goto('/dashboard')
-    const rows = page.locator('.position-table .el-table__row')
+    const rows = page.locator('.ap-list .ap-row')
     await expect(rows).toHaveCount(3)
     await expect(rows.nth(0)).toContainText('SZ:000002')
     await expect(rows.nth(1)).toContainText('SH:600000')
     await expect(rows.nth(2)).toContainText('SZ:300001')
 
-    await page.getByRole('columnheader', { name: /当前总价值/ }).click()
+    await page.locator('.ap-th-prices .ap-sort-btn', { hasText: '现价' }).click()
     await expect(rows.nth(0)).toContainText('SH:600000')
     await expect(rows.nth(1)).toContainText('SZ:000002')
     await expect(rows.nth(2)).toContainText('SZ:300001')
@@ -394,8 +394,8 @@ test.describe('portfolio journal dashboard', () => {
     await confirm.click()
     await expect.poll(() => sellBodies.length).toBe(1)
     expect(sellBodies[0]).toMatchObject({ qty: '4.0000', matches: [{ lotId: 'lot-newer-1234567890', matchedQty: '4.0000' }] })
-    const positionRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SH:600519' })
-    await expect(positionRow.locator('.position-quantity')).toHaveText('6 股')
+    const positionRow = page.locator('.ap-list .ap-row').filter({ hasText: 'SH:600519' })
+    await expect(positionRow.locator('.ap-sec-holding')).toContainText('6股')
   })
 
   test('distinguishes zero, stale and unavailable values without showing a partial total', async ({ page }) => {
@@ -442,16 +442,16 @@ test.describe('portfolio journal dashboard', () => {
     await expect(page.getByText('账户浮盈不可用', { exact: true })).toBeVisible()
     await expect(page.getByText('¥ 999.00')).toHaveCount(0)
 
-    const zeroRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SH:600519' })
+    const zeroRow = page.locator('.ap-list .ap-row').filter({ hasText: 'SH:600519' })
     await expect(zeroRow).toContainText('0.00%')
-    await expect(zeroRow).toContainText('¥ 0.00')
+    await expect(zeroRow).toContainText('¥0.00')
 
-    const staleRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SZ:000001' })
-    await expect(staleRow).toContainText('已过期')
-    await expect(staleRow).toContainText('组浮盈 — / —')
+    const staleRow = page.locator('.ap-list .ap-row').filter({ hasText: 'SZ:000001' })
+    await expect(staleRow).toContainText('过期')
+    await expect(staleRow).toContainText('—')
 
-    const missingRow = page.locator('.position-table .el-table__row').filter({ hasText: 'SZ:300001' })
-    await expect(missingRow).toContainText('行情不可用')
+    const missingRow = page.locator('.ap-list .ap-row').filter({ hasText: 'SZ:300001' })
+    await expect(missingRow).toContainText('不可用')
   })
 
   test('keeps ledger actions usable when the dashboard request fails', async ({ page }) => {

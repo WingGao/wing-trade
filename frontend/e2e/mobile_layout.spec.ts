@@ -447,22 +447,19 @@ for (const viewport of [
     await page.goto('/dashboard')
     await expect(page.locator('.m-topbar')).toBeVisible()
     await expect(page.locator('.m-tabbar')).toBeVisible()
-    await expect(page.locator('.m-position-list .m-pos-item')).toHaveCount(3)
+    await expect(page.locator('.ap-list .ap-row')).toHaveCount(3)
 
-    // 验证活动仓位默认按当前涨幅降序，无行情持仓始终在末尾，且全展开显示最低批（不显示回本）
-    const links = page.locator('.m-pos-item .m-pos-link strong')
+    // 验证活动仓位默认按当前涨幅降序，无行情持仓始终在末尾，且三列展示现价/低批/上卖
+    const links = page.locator('.ap-row .ap-code-link')
     await expect(links).toHaveText(['SH:600519', 'SZ:000001', 'SH:601318'])
-    await expect(page.locator('.m-pos-item').first()).toContainText('最低批')
-    await expect(page.locator('.m-pos-item').first()).not.toContainText('回本')
-    const unitPriceSingleLine = await page.locator('.m-pos-item .quote-unit-price').evaluateAll((nodes) =>
-      nodes.every((node) => node.getClientRects().length === 1),
-    )
-    expect(unitPriceSingleLine).toBe(true)
-    await expect(page.locator('.m-pos-item').first().getByText('实时', { exact: true })).toHaveCount(0)
+    await expect(page.locator('.ap-row').first()).toContainText('低批')
+    await expect(page.locator('.ap-row').first()).toContainText('上卖')
+    await expect(page.locator('.ap-row').first()).not.toContainText('回本')
+    await expect(page.locator('.ap-row').first().getByText('实时', { exact: true })).toHaveCount(0)
     await assertNoHorizontalOverflow(page)
 
-    // 点击当前总价值排序头切换升序，无行情持仓仍固定在末尾
-    await page.locator('.m-sort-btn').click()
+    // 点击现价排序头切换升序，无行情持仓仍固定在末尾
+    await page.locator('.ap-th-prices .ap-sort-btn', { hasText: '现价' }).click()
     await expect(links).toHaveText(['SZ:000001', 'SH:600519', 'SH:601318'])
 
     // 全局止盈弹窗无横向溢出
@@ -497,8 +494,8 @@ for (const viewport of [
     await sellDrawer.getByRole('button', { name: '确认卖出' }).click()
     await expect.poll(() => state.sellCount).toBe(1)
 
-    // 进入个股详情页验证上方常驻活动仓位横向切换条、默认收起的操作栏/分时图、4项汇总、持仓批次、止盈弹窗与已结清明细
-    await page.locator('.m-pos-link', { hasText: 'SH:600519' }).click()
+    // 进入个股详情页验证上方常驻活动仓位横向切换条、默认收起的操作栏/分时图、5项汇总（含上次卖出价）、持仓批次、止盈弹窗与已结清明细
+    await page.locator('.ap-code-link', { hasText: 'SH:600519' }).click()
     await expect(page).toHaveURL(/\/security\/SH\/600519/)
     await expect(page.locator('.m-pos-strip .m-pos-chip')).toHaveCount(3)
     await expect(page.locator('.m-pos-strip .m-pos-chip.is-active')).toContainText('贵州茅台')
@@ -508,7 +505,7 @@ for (const viewport of [
     await expect(page.locator('.m-detail-actions')).toBeVisible()
     await page.locator('.m-collapse-head').click()
     await expect(page.getByRole('img', { name: '当前交易日股价走势图' })).toBeVisible()
-    await expect(page.locator('.m-holding-summary .summary-item')).toHaveCount(4)
+    await expect(page.locator('.m-holding-summary .summary-item')).toHaveCount(5)
     await expect(page.locator('.m-lot-list .m-lot-item')).toHaveCount(1)
     await assertNoHorizontalOverflow(page)
 

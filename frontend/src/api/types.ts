@@ -154,6 +154,9 @@ export interface LotsSummary {
   remainingCost: string
   realizedPnl: string
   unrealizedPnl: string | null
+  lastSellPrice?: string | null
+  lastSellExecutedAt?: string | null
+  vsLastSellPct?: string | null
 }
 
 export interface LotsRead {
@@ -277,6 +280,9 @@ export interface DashboardPosition extends Position {
   quote: Quote | null
   unrealizedReturnPct: string | null
   lowestPriceGroup: LowestPriceGroup | null
+  lastSellPrice?: string | null
+  lastSellExecutedAt?: string | null
+  vsLastSellPct?: string | null
   needsRefresh?: boolean
 }
 
