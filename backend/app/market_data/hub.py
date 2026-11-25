@@ -121,6 +121,7 @@ class MarketDataHub:
         self._ephemeral_refs: dict[str, int] = {}
         self._fund_proxies: dict[str, list[SecurityMeta]] = {}
         self._subscribers: dict[str, StreamSubscriber] = {}
+        self._quote_listeners: list[Callable[[list[str]], None]] = []
 
         self._pending_broadcast: dict[str, QuoteSnapshot] = {}
         self._broadcast_handle: asyncio.TimerHandle | None = None
@@ -486,7 +487,24 @@ class MarketDataHub:
                     published.append(derived)
 
         self._schedule_broadcast()
+        if published and self._quote_listeners:
+            published_symbols = list({canonical_symbol(item.symbol) for item in published})
+            for listener in list(self._quote_listeners):
+                try:
+                    listener(published_symbols)
+                except Exception as exc:
+                    logger.warning("行情发布监听器回调失败: %s", exc)
         return published
+
+    def add_quote_listener(self, listener: Callable[[list[str]], None]) -> None:
+        """注册行情发布监听器，供止盈推送引擎等下游模块非阻塞接收变更标的。"""
+        if listener not in self._quote_listeners:
+            self._quote_listeners.append(listener)
+
+    def remove_quote_listener(self, listener: Callable[[list[str]], None]) -> None:
+        """注销已注册的行情发布监听器。"""
+        if listener in self._quote_listeners:
+            self._quote_listeners.remove(listener)
 
     def _schedule_broadcast(self) -> None:
         """按 300ms 节流窗口合并广播；窗口为 0 或无活跃事件循环时立即派发。"""

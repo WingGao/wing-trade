@@ -17,6 +17,7 @@ from .ledger import (
     TradeMatch,
     WatchlistItem,
 )
+from .notification import NotificationChannel, ProfitAlertDelivery
 
 __all__ = [
     "Account",
@@ -25,7 +26,9 @@ __all__ = [
     "Cycle",
     "EmailVerificationCode",
     "Lot",
+    "NotificationChannel",
     "PositionRefreshState",
+    "ProfitAlertDelivery",
     "ProfitSetting",
     "ProfitTarget",
     "QuoteCache",

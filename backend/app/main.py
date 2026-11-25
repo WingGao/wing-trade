@@ -19,7 +19,7 @@ from app.api.errors import (
     integrity_error_handler,
     validation_error_handler,
 )
-from app.api.v1.router import quote_hub, router
+from app.api.v1.router import profit_alert_engine, quote_hub, router
 from app.config import normalize_log_level, settings
 from app.db.migrations import prepare_database_schema
 from app.db.session import SessionLocal, engine, healthcheck
@@ -97,10 +97,12 @@ def create_app(*, create_tables: bool = True, frontend_dist_dir: str | None = No
                 ensure_default_admin_and_backfill(session, settings.default_admin_email)
                 session.commit()
             await quote_hub.start()
+            await profit_alert_engine.start()
         try:
             yield
         finally:
             if create_tables:
+                await profit_alert_engine.stop()
                 await quote_hub.stop()
 
     application = FastAPI(title="A-Share Portfolio Journal", version="0.1.0", lifespan=lifespan)

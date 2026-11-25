@@ -20,8 +20,16 @@ def test_startup_schema_migrates_empty_database(tmp_path: Path) -> None:
             revision = connection.execute(
                 text('SELECT version_num FROM alembic_version')
             ).scalar_one()
-        assert {'accounts', 'trades', 'position_refresh_states', 'users', 'user_sessions'} <= tables
-        assert revision == '0005_security_proxy_fields'
+        assert {
+            'accounts',
+            'trades',
+            'position_refresh_states',
+            'users',
+            'user_sessions',
+            'notification_channels',
+            'profit_alert_deliveries',
+        } <= tables
+        assert revision == '0006_take_profit_notifications'
     finally:
         engine.dispose()
 
@@ -57,7 +65,7 @@ def test_startup_schema_adopts_legacy_sqlite_without_data_loss(tmp_path: Path) -
             ).scalar_one()
             integrity = connection.execute(text('PRAGMA integrity_check')).scalar_one()
         assert count == 1
-        assert revision == '0005_security_proxy_fields'
+        assert revision == '0006_take_profit_notifications'
         assert integrity == 'ok'
     finally:
         engine.dispose()

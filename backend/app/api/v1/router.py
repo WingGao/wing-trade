@@ -41,6 +41,8 @@ from app.api.utils import begin_write, fees_from, finish_write
 from app.api.v1.admin import router as admin_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.market import router as market_router
+from app.api.v1.notifications import get_wecom_channel
+from app.api.v1.notifications import router as notifications_router
 from app.config import settings
 from app.db.session import SessionLocal
 from app.domain.enums import CalcBasis, MatchingMethod, TradeSide, TradeStatus
@@ -69,6 +71,8 @@ from app.services.cycle import CycleService
 from app.services.dashboard import DashboardService
 from app.services.ledger import TradeLedgerService
 from app.services.matching import MatchingService
+from app.services.notifications.channels import WECOM_CHANNEL_TYPE
+from app.services.notifications.engine import ProfitAlertEngine
 from app.services.position_refresh import PositionRefreshService
 from app.services.profit_settings import ProfitSettingsService
 from app.services.recalculate import RecalculationService
@@ -82,6 +86,11 @@ quote_hub = MarketDataHub(
     settings=settings,
 )
 quote_collector.service.bind_hub(quote_hub)
+profit_alert_engine = ProfitAlertEngine(
+    quote_hub=quote_hub,
+    session_factory=SessionLocal,
+    channels={WECOM_CHANNEL_TYPE: get_wecom_channel()},
+)
 
 
 def _notify_quote_hub_scope(session: Session) -> None:
@@ -92,6 +101,7 @@ router = APIRouter(prefix="/api/v1")
 router.include_router(auth_router)
 router.include_router(admin_router)
 router.include_router(market_router)
+router.include_router(notifications_router)
 
 
 def account_data(account: Account) -> dict[str, Any]:

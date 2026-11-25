@@ -49,6 +49,8 @@ def _status_for_code(code: str) -> int:
         return 422
     if code == "VERIFICATION_CODE_COOLDOWN":
         return 429
+    if code == "NOTIFICATION_DELIVERY_FAILED":
+        return 502
     return 400
 
 

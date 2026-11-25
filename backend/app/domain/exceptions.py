@@ -127,3 +127,9 @@ class VerificationCodeCooldownError(DomainError):
 
     code = "VERIFICATION_CODE_COOLDOWN"
 
+
+class NotificationDeliveryError(DomainError):
+    """外部通知渠道发送失败（例如网络异常或企微接口返回非零错误码）。"""
+
+    code = "NOTIFICATION_DELIVERY_FAILED"
+
