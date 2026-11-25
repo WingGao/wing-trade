@@ -555,3 +555,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: 活动仓位与详情页增加上次卖出价并对齐双端展示
+<!-- trellis-session: v=2 fp=bfc6d01fc2496d42 -->
+
+**Date**: 2026-11-25
+**Task**: 活动仓位与详情页增加上次卖出价并对齐双端展示
+**Branch**: `master`
+
+### Summary
+
+后端 dashboard 与 lots 接口新增跨周期最近一笔有效卖出价及相对涨跌幅；前端抽取双端共享 ActivePositionList 与 SecurityDetailPanel，实现设计图三列布局、4项筛选、搜索、紧凑切换、5维正反排序及 PC 端首页右栏个股详情联动，详情页汇总新增上次卖出价并同步更新 Trellis 规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `37585c4` | feat(backend): 活动仓位与详情接口增加上次卖出价及相对涨跌幅 |
+| `9b0ce83` | feat(frontend): 统一双端活动仓位展示、增加上次卖出价并联动 PC 右栏详情 |
+
+### Status
+
+[OK] **Completed**

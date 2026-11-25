@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
+- **Total Sessions**: 23
 - **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~557 | Active |
+| `journal-1.md` | ~580 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-11-25 | 活动仓位与详情页增加上次卖出价并对齐双端展示 | `37585c4`, `9b0ce83` | `master` |
 | 22 | 2026-11-25 | 前后端时间默认为北京时间 | `3d5b383`, `44df945` | `master` |
 | 21 | 2026-11-25 | 长桥实时推送行情与前端 SSE 事件流 | `486563e`, `e450bfd`, `2e42b8a` | `master` |
 | 20 | 2026-11-24 | 场外宽基基金盘中指数估算 | `8680ae2`, `d78da26`, `663cbc7` | `master` |
