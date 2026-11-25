@@ -3,6 +3,10 @@
 # 优先级：YAML 配置 > 环境变量（env）> 内置默认值。
 # 任何省略或设为 null 的字段都会自动回退到对应的环境变量或默认值。
 
+server:
+  # 后端 HTTP 服务监听端口（1-65535，默认 12011）。
+  port: 12011
+
 database:
   # 可选：显式连接串优先级最高，留空则根据 backend 自动拼装。
   url: ""
@@ -25,10 +29,20 @@ logging:
   level: INFO
 
 quote:
-  # 行情提供方：eastmoney 或 mock。
+  # 行情提供方：eastmoney、longbridge 或 mock。
   provider: eastmoney
   # 上游行情请求超时时间（秒），必须为正数。
   timeout_seconds: 5
+  # 当 provider 为 longbridge 时生效的 API Key 静态凭据配置。
+  longbridge:
+    app_key: ""
+    app_secret: ""
+    access_token: ""
+    # 可选：是否订阅美股夜盘行情（默认 false）。
+    enable_overnight: false
+    # 可选：自定义网关地址（例如大陆节点 https://openapi.longbridge.cn），留空使用 SDK 默认。
+    http_url: ""
+    quote_ws_url: ""
 
 auth:
   # 默认管理员邮箱：email.provider=smtp 时必填；console 模式默认 admin@localhost。

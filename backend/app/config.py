@@ -14,13 +14,16 @@ from sqlalchemy.engine import URL
 CONFIG_FILE_ENV_NAME = "CONFIG_FILE"
 DEFAULT_CONFIG_FILENAMES = ("config.yaml", "config.yml")
 SUPPORTED_DATABASE_BACKENDS = frozenset({"sqlite", "mysql"})
-SUPPORTED_QUOTE_PROVIDERS = frozenset({"eastmoney", "mock"})
+SUPPORTED_QUOTE_PROVIDERS = frozenset({"eastmoney", "longbridge", "mock"})
 SUPPORTED_EMAIL_PROVIDERS = frozenset({"console", "smtp"})
 SUPPORTED_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 DEFAULT_DEV_ADMIN_EMAIL = "admin@localhost"
 DEFAULT_DEV_AUTH_SECRET = "wing-trade-dev-auth-secret-change-me"
 
 _YAML_SCHEMA: dict[str, Any] = {
+    "server": {
+        "port": None,
+    },
     "database": {
         "url": None,
         "backend": None,
@@ -40,6 +43,14 @@ _YAML_SCHEMA: dict[str, Any] = {
     "quote": {
         "provider": None,
         "timeout_seconds": None,
+        "longbridge": {
+            "app_key": None,
+            "app_secret": None,
+            "access_token": None,
+            "enable_overnight": None,
+            "http_url": None,
+            "quote_ws_url": None,
+        },
     },
     "auth": {
         "default_admin_email": None,
@@ -355,11 +366,18 @@ def _mysql_database_url_from_sources(config: dict[str, Any]) -> str:
 class Settings:
     """应用运行时不可变配置对象。"""
 
+    server_port: int = 12011
     database_url: str = "sqlite:///./ledger.db"
     echo_sql: bool = False
     log_level: str = "INFO"
     quote_provider: str = "eastmoney"
     quote_timeout_seconds: Decimal = Decimal("5")
+    longbridge_app_key: str = ""
+    longbridge_app_secret: str = ""
+    longbridge_access_token: str = ""
+    longbridge_enable_overnight: bool = False
+    longbridge_http_url: str = ""
+    longbridge_quote_ws_url: str = ""
     default_admin_email: str = DEFAULT_DEV_ADMIN_EMAIL
     auth_secret_key: str = DEFAULT_DEV_AUTH_SECRET
     auth_session_days: int = 30
@@ -376,7 +394,8 @@ class Settings:
     frontend_dist_dir: str = ""
 
     def __post_init__(self) -> None:
-        """校验直接构造、YAML 或环境变量来源的日志、行情、认证与邮件配置。"""
+        """校验直接构造、YAML 或环境变量来源的服务端口、日志、行情、认证与邮件配置。"""
+        server_port = _parse_port(self.server_port, env_name="SERVER_PORT")
         log_level = normalize_log_level(self.log_level)
         provider = self.quote_provider.strip().lower()
         if provider not in SUPPORTED_QUOTE_PROVIDERS:
@@ -386,6 +405,21 @@ class Settings:
             self.quote_timeout_seconds,
             field_name="QUOTE_TIMEOUT_SECONDS",
         )
+        longbridge_app_key = self.longbridge_app_key.strip()
+        longbridge_app_secret = self.longbridge_app_secret.strip()
+        longbridge_access_token = self.longbridge_access_token.strip()
+        longbridge_enable_overnight = bool(self.longbridge_enable_overnight)
+        longbridge_http_url = self.longbridge_http_url.strip()
+        longbridge_quote_ws_url = self.longbridge_quote_ws_url.strip()
+        if provider == "longbridge":
+            if not longbridge_app_key:
+                raise ValueError("LONGBRIDGE_APP_KEY is required when QUOTE_PROVIDER=longbridge")
+            if not longbridge_app_secret:
+                raise ValueError("LONGBRIDGE_APP_SECRET is required when QUOTE_PROVIDER=longbridge")
+            if not longbridge_access_token:
+                raise ValueError(
+                    "LONGBRIDGE_ACCESS_TOKEN is required when QUOTE_PROVIDER=longbridge"
+                )
 
         email_provider = self.email_provider.strip().lower()
         if email_provider not in SUPPORTED_EMAIL_PROVIDERS:
@@ -421,9 +455,16 @@ class Settings:
             if not smtp_from:
                 raise ValueError("SMTP_FROM is required when EMAIL_PROVIDER=smtp")
 
+        object.__setattr__(self, "server_port", server_port)
         object.__setattr__(self, "log_level", log_level)
         object.__setattr__(self, "quote_provider", provider)
         object.__setattr__(self, "quote_timeout_seconds", timeout)
+        object.__setattr__(self, "longbridge_app_key", longbridge_app_key)
+        object.__setattr__(self, "longbridge_app_secret", longbridge_app_secret)
+        object.__setattr__(self, "longbridge_access_token", longbridge_access_token)
+        object.__setattr__(self, "longbridge_enable_overnight", longbridge_enable_overnight)
+        object.__setattr__(self, "longbridge_http_url", longbridge_http_url)
+        object.__setattr__(self, "longbridge_quote_ws_url", longbridge_quote_ws_url)
         object.__setattr__(self, "default_admin_email", admin_email)
         object.__setattr__(self, "auth_secret_key", secret_key)
         object.__setattr__(self, "auth_session_days", session_days)
@@ -449,6 +490,14 @@ class Settings:
         defaults = cls()
         resolved_path = _resolve_config_path(config_file, discover_default=discover_default)
         yaml_config = _load_yaml_config(resolved_path) if resolved_path is not None else {}
+
+        raw_server_port = _resolve_raw(yaml_config, ("server", "port"), "SERVER_PORT")
+        server_port = (
+            defaults.server_port
+            if raw_server_port is None
+            or (isinstance(raw_server_port, str) and not raw_server_port.strip())
+            else _parse_port(raw_server_port, env_name="SERVER_PORT")
+        )
 
         quote_provider = _resolve_str(
             yaml_config,
@@ -535,6 +584,7 @@ class Settings:
             default_admin_email = DEFAULT_DEV_ADMIN_EMAIL
 
         return cls(
+            server_port=server_port,
             database_url=cls._database_url_from_sources(yaml_config, defaults.database_url),
             echo_sql=_resolve_bool(
                 yaml_config,
@@ -551,6 +601,47 @@ class Settings:
             ),
             quote_provider=quote_provider,
             quote_timeout_seconds=quote_timeout_seconds,
+            longbridge_app_key=_resolve_str(
+                yaml_config,
+                ("quote", "longbridge", "app_key"),
+                "LONGBRIDGE_APP_KEY",
+                default="",
+                empty_as_missing=True,
+            ),
+            longbridge_app_secret=_resolve_str(
+                yaml_config,
+                ("quote", "longbridge", "app_secret"),
+                "LONGBRIDGE_APP_SECRET",
+                default="",
+                empty_as_missing=True,
+            ),
+            longbridge_access_token=_resolve_str(
+                yaml_config,
+                ("quote", "longbridge", "access_token"),
+                "LONGBRIDGE_ACCESS_TOKEN",
+                default="",
+                empty_as_missing=True,
+            ),
+            longbridge_enable_overnight=_resolve_bool(
+                yaml_config,
+                ("quote", "longbridge", "enable_overnight"),
+                "LONGBRIDGE_ENABLE_OVERNIGHT",
+                default=False,
+            ),
+            longbridge_http_url=_resolve_str(
+                yaml_config,
+                ("quote", "longbridge", "http_url"),
+                "LONGBRIDGE_HTTP_URL",
+                default="",
+                empty_as_missing=True,
+            ),
+            longbridge_quote_ws_url=_resolve_str(
+                yaml_config,
+                ("quote", "longbridge", "quote_ws_url"),
+                "LONGBRIDGE_QUOTE_WS_URL",
+                default="",
+                empty_as_missing=True,
+            ),
             default_admin_email=default_admin_email,
             auth_secret_key=_resolve_str(
                 yaml_config,

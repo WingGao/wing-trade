@@ -26,10 +26,17 @@ DATABASE_ENV_KEYS = (
 ALL_CONFIG_ENV_KEYS = (
     *DATABASE_ENV_KEYS,
     "CONFIG_FILE",
+    "SERVER_PORT",
     "ECHO_SQL",
     "LOG_LEVEL",
     "QUOTE_PROVIDER",
     "QUOTE_TIMEOUT_SECONDS",
+    "LONGBRIDGE_APP_KEY",
+    "LONGBRIDGE_APP_SECRET",
+    "LONGBRIDGE_ACCESS_TOKEN",
+    "LONGBRIDGE_ENABLE_OVERNIGHT",
+    "LONGBRIDGE_HTTP_URL",
+    "LONGBRIDGE_QUOTE_WS_URL",
     "DEFAULT_ADMIN_EMAIL",
     "AUTH_SECRET_KEY",
     "AUTH_SESSION_DAYS",
@@ -103,6 +110,7 @@ def test_database_backend_defaults_to_sqlite(monkeypatch: pytest.MonkeyPatch) ->
 
     settings = Settings.from_env()
 
+    assert settings.server_port == 12011
     assert settings.database_url == "sqlite:///./ledger.db"
 
 
@@ -168,6 +176,7 @@ def test_structured_yaml_overrides_env_including_falsy_values(
 ) -> None:
     """结构化 YAML 应优先覆盖同名环境变量，包括 false 等假值配置。"""
     _clear_all_config_environment(monkeypatch)
+    monkeypatch.setenv("SERVER_PORT", "8081")
     monkeypatch.setenv("DATABASE_BACKEND", "sqlite")
     monkeypatch.setenv("ECHO_SQL", "true")
     monkeypatch.setenv("LOG_LEVEL", "ERROR")
@@ -184,6 +193,8 @@ def test_structured_yaml_overrides_env_including_falsy_values(
     yaml_file = tmp_path / "config.yaml"
     yaml_file.write_text(
         """
+server:
+  port: 9001
 database:
   backend: mysql
   echo_sql: false
@@ -227,6 +238,7 @@ frontend:
     assert parsed_db.database == "yaml_ledger"
     assert parsed_db.username == "yaml_user"
     assert parsed_db.password == " p@ss/word "
+    assert settings.server_port == 9001
     assert settings.echo_sql is False
     assert settings.log_level == "DEBUG"
     assert settings.quote_provider == "mock"
@@ -253,6 +265,7 @@ def test_partial_yaml_and_null_fields_fallback_to_env_and_defaults(
 ) -> None:
     """YAML 中省略或设为 null 的字段应按字段粒度回退到环境变量与默认值。"""
     _clear_all_config_environment(monkeypatch)
+    monkeypatch.setenv("SERVER_PORT", "8100")
     monkeypatch.setenv("DATABASE_BACKEND", "mysql")
     monkeypatch.setenv("MYSQL_HOST", "env-mysql")
     monkeypatch.setenv("MYSQL_PORT", "3306")
@@ -266,6 +279,8 @@ def test_partial_yaml_and_null_fields_fallback_to_env_and_defaults(
     yaml_file = tmp_path / "partial.yaml"
     yaml_file.write_text(
         """
+server:
+  port: null
 database:
   url: ""
   mysql:
@@ -288,6 +303,7 @@ quote:
     assert parsed_db.database == "env_db"
     assert parsed_db.username == "env_user"
     assert parsed_db.password == "env_pwd"
+    assert settings.server_port == 8100
     assert settings.log_level == "WARNING"
     assert settings.quote_provider == "mock"
     assert settings.quote_timeout_seconds == Decimal("8")
@@ -330,6 +346,7 @@ def test_empty_yaml_file_falls_back_to_env(
     settings = Settings.load(empty_file)
 
     assert settings.log_level == "WARNING"
+    assert settings.server_port == 12011
     assert settings.database_url == "sqlite:///./ledger.db"
 
 
@@ -371,6 +388,26 @@ def test_yaml_error_cases_raise_clear_value_error(
     with pytest.raises(ValueError, match="AUTH_SESSION_DAYS"):
         Settings.load(bool_days)
 
+    bool_server_port = tmp_path / "bool_server_port.yaml"
+    bool_server_port.write_text("server:\n  port: true\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="SERVER_PORT"):
+        Settings.load(bool_server_port)
+
+
+def test_server_port_defaults_env_and_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """后端端口应默认 12011、支持 SERVER_PORT 环境变量并拦截非法端口值。"""
+    _clear_all_config_environment(monkeypatch)
+
+    assert Settings.load(discover_default=False).server_port == 12011
+
+    monkeypatch.setenv("SERVER_PORT", "8088")
+    assert Settings.load(discover_default=False).server_port == 8088
+
+    for invalid_port in ("0", "65536", "abc"):
+        monkeypatch.setenv("SERVER_PORT", invalid_port)
+        with pytest.raises(ValueError, match="SERVER_PORT"):
+            Settings.load(discover_default=False)
+
 
 def test_repo_config_example_yaml_is_loadable(monkeypatch: pytest.MonkeyPatch) -> None:
     """仓库根目录的 config.example.yaml 模板应能直接通过配置解析与校验。"""
@@ -379,7 +416,53 @@ def test_repo_config_example_yaml_is_loadable(monkeypatch: pytest.MonkeyPatch) -
 
     settings = Settings.load(example_path)
 
+    assert settings.server_port == 12011
     assert settings.database_url == "sqlite:///./ledger.db"
     assert settings.log_level == "INFO"
     assert settings.quote_provider == "eastmoney"
     assert settings.email_provider == "console"
+
+
+def test_longbridge_config_yaml_overrides_env_and_requires_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """长桥模式应支持 YAML > env 优先级、布尔假值覆盖，并在缺失三元组时报错。"""
+    _clear_all_config_environment(monkeypatch)
+    monkeypatch.setenv("QUOTE_PROVIDER", "longbridge")
+    monkeypatch.setenv("LONGBRIDGE_APP_KEY", "env-key")
+    monkeypatch.setenv("LONGBRIDGE_APP_SECRET", "env-secret")
+    monkeypatch.setenv("LONGBRIDGE_ACCESS_TOKEN", "env-token")
+    monkeypatch.setenv("LONGBRIDGE_ENABLE_OVERNIGHT", "true")
+    monkeypatch.setenv("LONGBRIDGE_HTTP_URL", "https://env.longbridge.cn")
+
+    yaml_file = tmp_path / "longbridge.yaml"
+    yaml_file.write_text(
+        """
+quote:
+  provider: longbridge
+  longbridge:
+    app_key: yaml-key
+    app_secret: ""
+    access_token: yaml-token
+    enable_overnight: false
+    quote_ws_url: wss://openapi-quote.longbridge.cn
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = Settings.load(yaml_file)
+    assert loaded.quote_provider == "longbridge"
+    assert loaded.longbridge_app_key == "yaml-key"
+    assert loaded.longbridge_app_secret == "env-secret"
+    assert loaded.longbridge_access_token == "yaml-token"
+    assert loaded.longbridge_enable_overnight is False
+    assert loaded.longbridge_http_url == "https://env.longbridge.cn"
+    assert loaded.longbridge_quote_ws_url == "wss://openapi-quote.longbridge.cn"
+
+    _clear_all_config_environment(monkeypatch)
+    monkeypatch.setenv("QUOTE_PROVIDER", "longbridge")
+    monkeypatch.setenv("LONGBRIDGE_APP_KEY", "only-key")
+    monkeypatch.setenv("LONGBRIDGE_APP_SECRET", "only-secret")
+    with pytest.raises(ValueError, match="LONGBRIDGE_ACCESS_TOKEN"):
+        Settings.load(discover_default=False)
