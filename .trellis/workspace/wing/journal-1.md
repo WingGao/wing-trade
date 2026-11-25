@@ -624,3 +624,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: 美股20日振幅接入长桥日K、修复腾讯备源与长桥时间戳时区
+<!-- trellis-session: v=2 fp=4d0840f76f8c2f13 -->
+
+**Date**: 2026-11-25
+**Task**: 美股20日振幅接入长桥日K、修复腾讯备源与长桥时间戳时区
+**Branch**: `master`
+
+### Summary
+
+为20日平均振幅接入长桥日K主源并复用QuoteContext，修复腾讯美股日K缺少交易所后缀与历史占位行污染，同时修复长桥无时区本地datetime误作UTC导致美股盘中被判定为盘后的问题。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a6a4f54` | fix(backend): 美股20日振幅接入长桥日K主源、修复腾讯后缀与长桥本地时间戳时区偏移 |
+
+### Status
+
+[OK] **Completed**
