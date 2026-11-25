@@ -5,6 +5,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,17 +24,37 @@ from app.config import normalize_log_level, settings
 from app.db.migrations import prepare_database_schema
 from app.db.session import SessionLocal, engine, healthcheck
 from app.domain.exceptions import DomainError
+from app.domain.time import BEIJING_TZ
 from app.services.auth_bootstrap import ensure_default_admin_and_backfill
 
 logger = logging.getLogger("ashare_ledger.api")
 
 
+class BeijingFormatter(logging.Formatter):
+    """统一以北京时间（Asia/Shanghai）输出日志时间戳的格式器。"""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        """将日志记录时间戳格式化为北京时间字符串。"""
+        dt = datetime.fromtimestamp(record.created, tz=BEIJING_TZ)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat(timespec="milliseconds")
+
+
 def configure_logging(log_level: str) -> None:
-    """按配置等级统一设置应用与 Uvicorn 命名日志记录器。"""
+    """按配置等级统一设置应用与 Uvicorn 命名日志记录器，并默认使用北京时间。"""
     level_name = normalize_log_level(log_level)
     level = getattr(logging, level_name)
-    logging.basicConfig(level=level)
-    logging.getLogger().setLevel(level)
+    formatter = BeijingFormatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+    else:
+        for handler in root_logger.handlers:
+            handler.setFormatter(formatter)
+    root_logger.setLevel(level)
     for logger_name in ("ashare_ledger", "uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(logger_name).setLevel(level)
 

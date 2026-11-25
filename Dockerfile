@@ -18,6 +18,7 @@ COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./
 RUN PIP_INDEX_URL=${PIP_INDEX_URL} pip install --no-cache-dir . uvicorn
 COPY --from=frontend-build /frontend/dist /app/static
+ENV TZ=Asia/Shanghai
 ENV DATABASE_SQLITE_PATH=/app/data/ashare_journal.db
 ENV FRONTEND_DIST_DIR=/app/static
 RUN mkdir -p /app/data

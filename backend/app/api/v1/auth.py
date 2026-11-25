@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -15,18 +14,11 @@ from app.domain.exceptions import (
     InvalidVerificationCodeError,
     VerificationCodeAttemptsExceededError,
 )
+from app.domain.time import format_beijing_iso
 from app.models.auth import User
 from app.services.auth import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _dt_utc(value: datetime | None) -> str | None:
-    """将数据库时间统一转换为带 UTC 时区的 ISO 字符串。"""
-    if value is None:
-        return None
-    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-    return normalized.isoformat()
 
 
 def user_data(user: User) -> dict[str, Any]:
@@ -38,8 +30,8 @@ def user_data(user: User) -> dict[str, Any]:
         "role": user.role,
         "status": user.status,
         "isDefaultAdmin": user.is_default_admin,
-        "lastLoginAt": _dt_utc(user.last_login_at),
-        "createdAt": _dt_utc(user.created_at),
+        "lastLoginAt": format_beijing_iso(user.last_login_at),
+        "createdAt": format_beijing_iso(user.created_at),
     }
 
 

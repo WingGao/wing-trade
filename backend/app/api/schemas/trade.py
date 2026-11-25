@@ -7,7 +7,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from app.domain.enums import MatchingMethod
 
-from .common import APIModel
+from .common import APIModel, AwareDateTime
 
 
 class FeeFields(APIModel):
@@ -22,7 +22,7 @@ class BuyTradeRequest(FeeFields):
     account_id: str | None = None
     security_id: str
     strategy_id: str | None = None
-    executed_at: datetime
+    executed_at: AwareDateTime
     qty: Decimal
     price: Decimal
     client_request_id: str | None = None
@@ -57,7 +57,7 @@ class TradeUpdateRequest(APIModel):
     model_config = ConfigDict(extra="forbid")
 
     revision: int = Field(ge=1, strict=True)
-    executed_at: datetime | None = None
+    executed_at: AwareDateTime | None = None
     qty: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
     price: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
     commission: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)

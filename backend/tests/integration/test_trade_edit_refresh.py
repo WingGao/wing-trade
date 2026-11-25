@@ -543,7 +543,8 @@ def test_quantity_and_time_edit_rebuilds_remaining_position(context: Context) ->
         row = client.get(scope_url(context, "lots")).json()["lots"][0]
         assert row["remainingQty"] == "6.0000"
         assert row["remainingCost"] == "60.0000"
-        assert datetime.fromisoformat(row["executedAt"]).hour == 2
+        assert row["executedAt"] == "2026-11-01T10:00:00+08:00"
+        assert datetime.fromisoformat(row["executedAt"]).hour == 10
 
 
 def test_repeated_mark_clear_and_failure_after_clear_are_atomic(

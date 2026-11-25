@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.enums import TradeSide, TradeStatus
 from app.domain.precision import round_amount, round_qty
+from app.domain.time import to_beijing
 from app.market_data.collector import QuoteCollector
 from app.market_data.provider import QuoteSnapshot
 from app.market_data.service import QuoteService
@@ -92,7 +93,7 @@ class DashboardService:
         return {
             "accountId": account.id,
             "currency": account.currency,
-            "asOf": current,
+            "asOf": to_beijing(current),
             "marketSessionOpen": session_open,
             "marketSession": market_session,
             "pollAfterSeconds": 10 if session_open else 60,
@@ -481,8 +482,16 @@ class DashboardService:
             "lastPrice": snapshot.last_price if snapshot is not None else None,
             "prevClose": snapshot.prev_close if snapshot is not None else None,
             "changePct": snapshot.change_pct if snapshot is not None else None,
-            "sourceTime": snapshot.source_time if snapshot is not None else None,
-            "fetchedAt": snapshot.fetched_at if snapshot is not None else None,
+            "sourceTime": (
+                to_beijing(snapshot.source_time)
+                if snapshot is not None and snapshot.source_time is not None
+                else None
+            ),
+            "fetchedAt": (
+                to_beijing(snapshot.fetched_at)
+                if snapshot is not None and snapshot.fetched_at is not None
+                else None
+            ),
             "provider": snapshot.provider if snapshot is not None else None,
             "isStale": True if snapshot is None else snapshot.is_stale,
             "marketSession": snapshot.market_session if snapshot is not None else None,

@@ -181,7 +181,7 @@ def test_lifo_preview_returns_real_buy_details_and_confirms_same_lots(api_client
     )
     assert matched_qty == Decimal("6")
     newer_match = body["matches"][0]
-    assert newer_match["buyExecutedAt"] == "2026-11-02T00:00:00+00:00"
+    assert newer_match["buyExecutedAt"] == "2026-11-02T08:00:00+08:00"
     assert newer_match["buyPrice"] == "20.000000"
     assert newer_match["buyQty"] == "4.0000"
     assert newer_match["availableQty"] == "4.0000"
@@ -230,4 +230,62 @@ def test_lifo_preview_returns_real_buy_details_and_confirms_same_lots(api_client
     remaining_by_id = {lot["id"]: lot["remainingQty"] for lot in remaining["lots"]}
     assert remaining_by_id[older_lot["id"]] == "8.0000"
     assert remaining_by_id[newer_lot["id"]] == "0.0000"
+
+
+def test_api_enforces_timezone_and_returns_beijing_time(api_client) -> None:
+    """API 入参必须携带显式时区，且所有对外时间响应统一输出带 +08:00 的北京时间。"""
+    security = api_client.post(
+        "/api/v1/securities", json={"market": "SH", "symbol": "600519", "name": "贵州茅台"}
+    ).json()
+
+    # 1. 无时区入参必须被拒绝（422）
+    naive_buy = api_client.post(
+        "/api/v1/trades/buy",
+        json={
+            "securityId": security["id"],
+            "executedAt": "2026-11-25T09:30:00",
+            "qty": "10",
+            "price": "1500",
+        },
+    )
+    assert naive_buy.status_code == 422
+
+    # 2. 带 +08:00 或 Z 时区入参均成功，且回显统一为 +08:00 北京时间
+    beijing_buy = api_client.post(
+        "/api/v1/trades/buy",
+        json={
+            "securityId": security["id"],
+            "executedAt": "2026-11-25T09:30:00+08:00",
+            "qty": "10",
+            "price": "1500",
+            "clientRequestId": "tz-buy-beijing",
+        },
+    )
+    assert beijing_buy.status_code == 201
+    buy_body = beijing_buy.json()
+    assert buy_body["executedAt"] == "2026-11-25T09:30:00+08:00"
+    assert buy_body["createdAt"].endswith("+08:00")
+
+    # 3. 编辑交易无时区入参被拒绝；带 Z 入参正确换算为 +08:00；未改动保持 revision 不变
+    naive_patch = api_client.patch(
+        f"/api/v1/trades/{buy_body['id']}",
+        json={"revision": 1, "executedAt": "2026-11-25T10:00:00"},
+    )
+    assert naive_patch.status_code == 422
+
+    same_time_patch = api_client.patch(
+        f"/api/v1/trades/{buy_body['id']}",
+        json={"revision": 1, "executedAt": "2026-11-25T01:30:00Z"},
+    )
+    assert same_time_patch.status_code == 200
+    assert same_time_patch.json()["trade"]["revision"] == 1
+    assert same_time_patch.json()["trade"]["executedAt"] == "2026-11-25T09:30:00+08:00"
+
+    # 4. 看板 asOf 与交易列表均返回 +08:00
+    dashboard = api_client.get("/api/v1/dashboard").json()
+    assert dashboard["asOf"].endswith("+08:00")
+    trades = api_client.get("/api/v1/trades").json()
+    assert all(row["executedAt"].endswith("+08:00") for row in trades)
+    assert all(row["createdAt"].endswith("+08:00") for row in trades)
+
 

@@ -240,7 +240,7 @@ def test_closed_details_include_every_active_buy_and_partial_sell_without_double
         reverse=True,
     )
     assert rows == expected_order
-    assert all(row["executedAt"].endswith("+00:00") for row in rows)
+    assert all(row["executedAt"].endswith("+08:00") for row in rows)
     for row in rows:
         SettledTradeDetailRead.model_validate(row)
         for field in ("qty", "originalTradeQty", "price", "cashAmount"):

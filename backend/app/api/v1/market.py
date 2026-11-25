@@ -12,6 +12,7 @@ from app.api.deps import get_current_user, get_db
 from app.domain.exceptions import EntityNotFoundError
 from app.domain.markets import currency_for_market
 from app.domain.precision import round_price
+from app.domain.time import format_beijing_iso
 from app.market_data.provider import QuoteSnapshot
 from app.market_data.security_info import (
     IntradayPoint,
@@ -46,8 +47,8 @@ def _format_quote_payload(
         "lastPrice": format(quote.last_price, ".6f"),
         "prevClose": format(quote.prev_close, ".6f") if quote.prev_close is not None else None,
         "changePct": format(quote.change_pct, ".6f") if quote.change_pct is not None else None,
-        "sourceTime": quote.source_time.isoformat() if quote.source_time else None,
-        "fetchedAt": quote.fetched_at.isoformat(),
+        "sourceTime": format_beijing_iso(quote.source_time),
+        "fetchedAt": format_beijing_iso(quote.fetched_at),
         "provider": quote.provider,
         "isStale": quote.is_stale or snapshot_stale,
         "marketSession": quote.market_session,
@@ -213,14 +214,17 @@ async def read_intraday(
                     "tradingDate": snapshot.trading_date,
                     "seriesKind": snapshot.series_kind,
                     "points": [
-                        {"time": point.time.isoformat(), "price": format(point.price, ".6f")}
+                        {
+                            "time": format_beijing_iso(point.time),
+                            "price": format(point.price, ".6f"),
+                        }
                         for point in snapshot.points
                     ],
                     "quote": _format_quote_payload(
                         security, snapshot.quote, snapshot_stale=snapshot.is_stale
                     ),
                     "provider": snapshot.provider,
-                    "fetchedAt": snapshot.fetched_at.isoformat(),
+                    "fetchedAt": format_beijing_iso(snapshot.fetched_at),
                     "isStale": snapshot.is_stale,
                     "error": snapshot.error,
                 }
@@ -232,7 +236,7 @@ async def read_intraday(
             "tradingDate": fund_nav_snapshot.trading_date,
             "seriesKind": fund_nav_snapshot.series_kind,
             "points": [
-                {"time": point.time.isoformat(), "price": format(point.price, ".6f")}
+                {"time": format_beijing_iso(point.time), "price": format(point.price, ".6f")}
                 for point in fund_nav_snapshot.points
             ],
             "quote": _format_quote_payload(
@@ -241,7 +245,7 @@ async def read_intraday(
                 snapshot_stale=fund_nav_snapshot.is_stale,
             ),
             "provider": fund_nav_snapshot.provider,
-            "fetchedAt": fund_nav_snapshot.fetched_at.isoformat(),
+            "fetchedAt": format_beijing_iso(fund_nav_snapshot.fetched_at),
             "isStale": fund_nav_snapshot.is_stale,
             "error": fund_nav_snapshot.error,
         }
@@ -271,14 +275,14 @@ async def read_intraday(
         "tradingDate": snapshot.trading_date,
         "seriesKind": snapshot.series_kind,
         "points": [
-            {"time": point.time.isoformat(), "price": format(point.price, ".6f")}
+            {"time": format_beijing_iso(point.time), "price": format(point.price, ".6f")}
             for point in snapshot.points
         ],
         "quote": _format_quote_payload(
             security, effective_quote, snapshot_stale=snapshot.is_stale
         ),
         "provider": snapshot.provider,
-        "fetchedAt": snapshot.fetched_at.isoformat(),
+        "fetchedAt": format_beijing_iso(snapshot.fetched_at),
         "isStale": snapshot.is_stale,
         "error": snapshot.error,
     }

@@ -6,6 +6,7 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
 RUN PIP_INDEX_URL=${PIP_INDEX_URL} pip install --no-cache-dir . uvicorn
+ENV TZ=Asia/Shanghai
 ENV DATABASE_URL=sqlite:////app/data/ashare_journal.db
 RUN mkdir -p /app/data
 EXPOSE 8000

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.domain.markets import currency_for_market
+from app.domain.time import format_beijing_iso
 from app.models.ledger import Account, Lot, Security, WatchlistItem
 
 from .longbridge_adapter import (
@@ -43,11 +44,8 @@ def _fmt_decimal(value: Decimal | None, digits: int = 6) -> str | None:
 
 
 def _fmt_dt(value: datetime | None) -> str | None:
-    """将 datetime 统一转换为 UTC ISO-8601 字符串。"""
-    if value is None:
-        return None
-    aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-    return aware.isoformat()
+    """将 datetime 统一转换为带 +08:00 的北京时间 ISO-8601 字符串。"""
+    return format_beijing_iso(value)
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,15 +4,11 @@ from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.domain.time import BEIJING_TZ
+
 MarketSessionPhase = Literal["pre", "regular", "post", "closed"]
 
-_SHANGHAI_TIMEZONE: tzinfo
-try:
-    _SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
-except ZoneInfoNotFoundError:
-    # Asia/Shanghai has no DST transitions. Keep Windows/offline environments
-    # usable when the optional system tzdata package is unavailable.
-    _SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+_SHANGHAI_TIMEZONE: tzinfo = BEIJING_TZ
 
 _NEW_YORK_TIMEZONE: tzinfo
 try:

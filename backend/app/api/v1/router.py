@@ -48,6 +48,7 @@ from app.domain.exceptions import EntityNotFoundError, ValidationError
 from app.domain.markets import currency_for_market
 from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_price, round_qty
+from app.domain.time import format_beijing_iso
 from app.market_data import MarketDataHub, QuoteCollector, create_quote_provider
 from app.models.auth import User
 from app.models.ledger import (
@@ -155,19 +156,13 @@ def _fmt(value: Decimal | None, scale: int = 4) -> str | None:
 
 
 def _dt(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    """将数据库或领域时间统一序列化为带 +08:00 的北京时间 ISO 字符串。"""
+    return format_beijing_iso(value)
 
 
 def _dt_utc(value: datetime | None) -> str | None:
-    """将 SQLite 可能缺失时区的时间按 UTC 序列化。"""
-    if value is None:
-        return None
-    normalized = (
-        value.replace(tzinfo=UTC)
-        if value.tzinfo is None
-        else value.astimezone(UTC)
-    )
-    return normalized.isoformat()
+    """兼容旧命名，统一序列化为带 +08:00 的北京时间 ISO 字符串。"""
+    return format_beijing_iso(value)
 
 
 def trade_data(trade: Trade) -> dict[str, Any]:

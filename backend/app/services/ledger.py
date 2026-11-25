@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from app.domain.exceptions import (
 )
 from app.domain.models import Fees, MatchRequest
 from app.domain.precision import ensure_decimal, round_amount, round_qty
+from app.domain.time import assume_utc
 from app.models.ledger import AuditEvent, Lot, Trade, TradeMatch
 from app.services.accounting import AccountingService
 from app.services.cycle import CycleService
@@ -145,6 +146,7 @@ class TradeLedgerService:
         duplicate = self._check_duplicate(account_id, client_request_id)
         if duplicate is not None:
             return duplicate
+        executed_at = assume_utc(executed_at)
         actual_fees = self._fees(fees, fee_values)
         calculation = AccountingService.calculate_buy(qty, price, actual_fees)
         existing_cycle = CycleService.get_open_cycle(
@@ -228,6 +230,7 @@ class TradeLedgerService:
         duplicate = self._check_duplicate(account_id, client_request_id)
         if duplicate is not None:
             return duplicate
+        executed_at = assume_utc(executed_at)
         actual_fees = self._fees(fees, fee_values)
         calculation = AccountingService.calculate_sell(qty, price, actual_fees)
         cycle = CycleService.get_open_cycle(self.session, account_id, security_id, strategy_id)
@@ -339,12 +342,7 @@ class TradeLedgerService:
     @staticmethod
     def _trade_edit_snapshot(trade: Trade) -> dict[str, object]:
         """将完整可编辑事实规整为可比较和可审计的快照。"""
-        executed_at = trade.executed_at
-        normalized = (
-            executed_at.replace(tzinfo=UTC)
-            if executed_at.tzinfo is None
-            else executed_at.astimezone(UTC)
-        )
+        normalized = assume_utc(trade.executed_at)
         return {
             "executed_at": normalized.isoformat(),
             "qty": trade.qty,
@@ -388,11 +386,7 @@ class TradeLedgerService:
         executed_at = changes.get("executed_at", trade.executed_at)
         if not isinstance(executed_at, datetime):
             raise ValidationError("成交时间无效")
-        executed_at = (
-            executed_at.replace(tzinfo=UTC)
-            if executed_at.tzinfo is None
-            else executed_at.astimezone(UTC)
-        )
+        executed_at = assume_utc(executed_at)
         memo = changes.get("memo", trade.memo)
         if memo is not None and not isinstance(memo, str):
             raise ValidationError("备注必须是文本或空值")
