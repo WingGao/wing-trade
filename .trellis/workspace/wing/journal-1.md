@@ -532,3 +532,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Next Steps
 
 - 在具备 Chromium 的环境中执行 pnpm --dir frontend exec playwright install chromium && pnpm --dir frontend run test:e2e
+
+
+## Session 22: 前后端时间默认为北京时间
+<!-- trellis-session: v=2 fp=97f3b5c8728fcb6a -->
+
+**Date**: 2026-11-25
+**Task**: 前后端时间默认为北京时间
+**Branch**: `master`
+
+### Summary
+
+统一前后端时间口径默认为北京时间（Asia/Shanghai / +08:00），底层保持 UTC 存储兼容 ledger.db；后端新增集中式时间模块与 AwareDateTime 强时区校验，统一 REST/SSE/日志/容器为北京时间；前端新增统一时间模块，修复买卖默认时间慢 8 小时问题并锁定所有展示为北京时间。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3d5b383` | feat(backend): 统一后端时间参数强时区校验与北京时间输出 |
+| `44df945` | feat(frontend): 统一前端默认北京时间与强时区时间参数处理 |
+
+### Status
+
+[OK] **Completed**
