@@ -8,6 +8,17 @@ from .calendar import (
 )
 from .collector import CircuitBreakerState, QuoteCollector
 from .factory import create_quote_provider
+from .hub import MarketDataHub
+from .longbridge_adapter import (
+    LongbridgeBaseline,
+    LongbridgeCredentials,
+    LongbridgeQuoteProvider,
+    LongbridgeQuoteStream,
+    PriorityFallbackQuoteProvider,
+    from_longbridge_symbol,
+    is_longbridge_supported_symbol,
+    to_longbridge_symbol,
+)
 from .provider import (
     AKShareQuoteProvider,
     CompositeQuoteProvider,
@@ -38,7 +49,13 @@ __all__ = [
     "EastmoneyUSQuoteProvider",
     "FallbackQuoteProvider",
     "FallbackUSQuoteProvider",
+    "LongbridgeBaseline",
+    "LongbridgeCredentials",
+    "LongbridgeQuoteProvider",
+    "LongbridgeQuoteStream",
+    "MarketDataHub",
     "MockQuoteProvider",
+    "PriorityFallbackQuoteProvider",
     "ProviderHealth",
     "QuoteCollector",
     "QuoteProvider",
@@ -47,4 +64,7 @@ __all__ = [
     "TencentUSQuoteProvider",
     "USMarketResolver",
     "create_quote_provider",
+    "from_longbridge_symbol",
+    "is_longbridge_supported_symbol",
+    "to_longbridge_symbol",
 ]

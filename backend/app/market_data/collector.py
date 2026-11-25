@@ -130,6 +130,8 @@ class QuoteCollector:
                     now=current,
                 )
                 session.commit()
+                if fresh and self.service.hub is not None:
+                    self.service.hub.publish(fresh, mark_dirty=False)
                 missing_count = len(set(requested_symbols) - set(fresh))
                 if missing_count:
                     logger.warning(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,11 +19,16 @@ from .provider import QuoteSnapshot, canonical_symbol
 class QuoteService:
     """Persistence and domain boundary for shared quote-cache rows."""
 
-    def __init__(self, calendar: AShareTradingCalendar | None = None) -> None:
-        """初始化 A 股、美股与场外基金缓存新鲜度日历。"""
+    def __init__(self, calendar: AShareTradingCalendar | None = None, *, hub: Any | None = None) -> None:
+        """初始化 A 股、美股与场外基金缓存新鲜度日历及可选内存行情中心引用。"""
         self.calendar = calendar or AShareTradingCalendar()
         self.us_calendar = USTradingCalendar()
         self.fund_calendar = OpenFundCalendar()
+        self.hub: Any | None = hub
+
+    def bind_hub(self, hub: Any | None) -> None:
+        """绑定或解除进程级内存行情中心，使缓存读取优先命中内存最新快照。"""
+        self.hub = hub
 
     def calendar_for_security(self, security: Security) -> AShareTradingCalendar:
         """返回证券所属市场的交易日历。"""
@@ -65,35 +71,49 @@ class QuoteService:
         security: Security,
         *,
         now: datetime,
+        prefer_hub: bool = True,
     ) -> QuoteSnapshot | None:
-        """读取单只证券在 quote_cache 中的原始行情快照，不做估算派生。"""
+        """读取单只证券的原始行情快照（优先合并内存行情中心与 quote_cache 中的最新数据）。"""
+        symbol = self.security_symbol(security)
+        hub_snap: QuoteSnapshot | None = None
+        if prefer_hub and self.hub is not None:
+            hub_snap = self.hub.get_raw_quote(symbol, now=now)
+
         row = session.get(QuoteCache, security.id)
-        if row is None:
-            return None
-        fetched_at = self._as_utc(row.fetched_at)
-        source_time = self._as_utc(row.source_time) if row.source_time is not None else None
-        calendar = self.calendar_for_security(security)
-        stale = row.is_stale or calendar.is_stale(fetched_at, now=now)
-        market_session = (
-            None
-            if security.market.upper() == "OF"
-            else calendar.session_phase(source_time or fetched_at)
-        )
-        try:
-            return QuoteSnapshot(
-                symbol=self.security_symbol(security),
-                last_price=row.last_price,
-                prev_close=row.prev_close,
-                change_pct=row.change_pct,
-                source_time=source_time,
-                fetched_at=fetched_at,
-                provider=row.provider,
-                is_stale=stale,
-                market_session=market_session,
+        db_snap: QuoteSnapshot | None = None
+        if row is not None:
+            fetched_at = self._as_utc(row.fetched_at)
+            source_time = self._as_utc(row.source_time) if row.source_time is not None else None
+            calendar = self.calendar_for_security(security)
+            stale = row.is_stale or calendar.is_stale(fetched_at, now=now)
+            market_session = (
+                None
+                if security.market.upper() == "OF"
+                else calendar.session_phase(source_time or fetched_at)
             )
-        except (TypeError, ValueError):
-            # 旧缓存可能来自更宽松版本；无效价格按无行情处理，不能改写成零。
-            return None
+            try:
+                db_snap = QuoteSnapshot(
+                    symbol=symbol,
+                    last_price=row.last_price,
+                    prev_close=row.prev_close,
+                    change_pct=row.change_pct,
+                    source_time=source_time,
+                    fetched_at=fetched_at,
+                    provider=row.provider,
+                    is_stale=stale,
+                    market_session=market_session,
+                )
+            except (TypeError, ValueError):
+                # 旧缓存可能来自更宽松版本；无效价格按无行情处理，不能改写成零。
+                db_snap = None
+
+        if hub_snap is None:
+            return db_snap
+        if db_snap is None:
+            return hub_snap
+        if self._as_utc(hub_snap.fetched_at) >= self._as_utc(db_snap.fetched_at):
+            return hub_snap
+        return db_snap
 
     def resolve_effective_snapshot(
         self,
@@ -234,8 +254,15 @@ class QuoteService:
                 result.append(raw_snapshot)
         return result
 
-    def upsert(self, session: Session, snapshots: Iterable[QuoteSnapshot], *, now: datetime | None = None) -> list[QuoteSnapshot]:
-        """把有效行情写入共享缓存并评估止盈提醒。"""
+    def upsert(
+        self,
+        session: Session,
+        snapshots: Iterable[QuoteSnapshot],
+        *,
+        now: datetime | None = None,
+        evaluate_targets: bool = True,
+    ) -> list[QuoteSnapshot]:
+        """把有效行情写入共享缓存，并按需评估止盈提醒。"""
         current = now or datetime.now(timezone.utc)
         result: list[QuoteSnapshot] = []
         target_snapshots: list[QuoteSnapshot] = []
@@ -266,7 +293,8 @@ class QuoteService:
             if not stale:
                 target_snapshots.append(stored)
         session.flush()
-        self.evaluate_targets(session, target_snapshots, at=current)
+        if evaluate_targets:
+            self.evaluate_targets(session, target_snapshots, at=current)
         return result
 
     def mark_stale(self, session: Session, securities: Iterable[Security]) -> list[QuoteSnapshot]:

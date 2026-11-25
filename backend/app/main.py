@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,7 +18,7 @@ from app.api.errors import (
     integrity_error_handler,
     validation_error_handler,
 )
-from app.api.v1.router import router
+from app.api.v1.router import quote_hub, router
 from app.config import normalize_log_level, settings
 from app.db.migrations import prepare_database_schema
 from app.db.session import SessionLocal, engine, healthcheck
@@ -63,8 +65,24 @@ def _mount_frontend(application: FastAPI, dist_dir: str) -> None:
 
 
 def create_app(*, create_tables: bool = True, frontend_dist_dir: str | None = None) -> FastAPI:
-    """创建并配置 FastAPI 应用实例。"""
-    application = FastAPI(title="A-Share Portfolio Journal", version="0.1.0")
+    """创建并配置 FastAPI 应用实例，并通过 lifespan 管理数据库启动初始化与行情中心生命周期。"""
+
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        """启动时完成数据库迁移、默认管理员初始化与行情中心启动；停机时优雅刷盘并关闭推流。"""
+        if create_tables:
+            prepare_database_schema(engine)
+            with SessionLocal() as session:
+                ensure_default_admin_and_backfill(session, settings.default_admin_email)
+                session.commit()
+            await quote_hub.start()
+        try:
+            yield
+        finally:
+            if create_tables:
+                await quote_hub.stop()
+
+    application = FastAPI(title="A-Share Portfolio Journal", version="0.1.0", lifespan=lifespan)
 
     @application.middleware("http")
     async def request_logging(request: Request, call_next):
@@ -89,15 +107,6 @@ def create_app(*, create_tables: bool = True, frontend_dist_dir: str | None = No
             },
         )
         return response
-
-    @application.on_event("startup")
-    def startup() -> None:
-        """启动时完成数据库迁移、默认管理员初始化及存量数据无损回填。"""
-        if create_tables:
-            prepare_database_schema(engine)
-            with SessionLocal() as session:
-                ensure_default_admin_and_backfill(session, settings.default_admin_email)
-                session.commit()
 
     @application.get("/health")
     def health() -> dict[str, str]:
@@ -125,3 +134,37 @@ def create_app(*, create_tables: bool = True, frontend_dist_dir: str | None = No
 
 
 app = create_app()
+
+
+def run_server(argv: list[str] | None = None) -> None:
+    """使用应用配置中的端口启动 Uvicorn 服务，支持通过命令行参数覆盖监听地址、端口与热重载。"""
+    import argparse
+    import importlib
+
+    from app.config import _parse_port
+
+    parser = argparse.ArgumentParser(description="启动 Wing Trade 后端服务")
+    parser.add_argument("--host", default="127.0.0.1", help="监听主机地址，默认 127.0.0.1")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=settings.server_port,
+        help="监听端口，默认读取 server.port / SERVER_PORT（回退 12011）",
+    )
+    parser.add_argument("--reload", action="store_true", help="开启开发热重载模式")
+    args = parser.parse_args(argv)
+    port = _parse_port(args.port, env_name="SERVER_PORT")
+
+    uvicorn = importlib.import_module("uvicorn")
+    reload_dirs = [str(Path(__file__).resolve().parents[1])] if args.reload else None
+    uvicorn.run(
+        "app.main:app",
+        host=args.host,
+        port=port,
+        reload=args.reload,
+        reload_dirs=reload_dirs,
+    )
+
+
+if __name__ == "__main__":
+    run_server()

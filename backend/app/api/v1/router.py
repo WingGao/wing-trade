@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+import json
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session, selectinload
 
@@ -38,12 +41,14 @@ from app.api.utils import begin_write, fees_from, finish_write
 from app.api.v1.admin import router as admin_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.market import router as market_router
+from app.config import settings
+from app.db.session import SessionLocal
 from app.domain.enums import CalcBasis, MatchingMethod, TradeSide, TradeStatus
 from app.domain.exceptions import EntityNotFoundError, ValidationError
 from app.domain.markets import currency_for_market
 from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_price, round_qty
-from app.market_data import QuoteCollector, create_quote_provider
+from app.market_data import MarketDataHub, QuoteCollector, create_quote_provider
 from app.models.auth import User
 from app.models.ledger import (
     Account,
@@ -69,6 +74,18 @@ from app.services.recalculate import RecalculationService
 from app.services.target import TargetService
 
 quote_collector = QuoteCollector(create_quote_provider())
+quote_hub = MarketDataHub(
+    quote_service=quote_collector.service,
+    provider=quote_collector.provider,
+    session_factory=SessionLocal,
+    settings=settings,
+)
+quote_collector.service.bind_hub(quote_hub)
+
+
+def _notify_quote_hub_scope(session: Session) -> None:
+    """在持仓、自选或基金代理配置变更提交后，非阻塞刷新内存行情中心订阅范围。"""
+    quote_hub.refresh_scope_from_db(session=session)
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(auth_router)
@@ -416,6 +433,7 @@ def update_security_proxy(
             security.tracking_ratio = Decimal("0.950000")
             session.flush()
             finish_write(session, True)
+            _notify_quote_hub_scope(session)
             return security_data(security)
 
         if ":" not in raw_proxy:
@@ -463,6 +481,7 @@ def update_security_proxy(
         security.tracking_ratio = round_price(ratio)
         session.flush()
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return security_data(security)
     except Exception:
         finish_write(session, False)
@@ -501,6 +520,7 @@ def add_watchlist(
             session.add(item)
             session.flush()
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return {"id": item.id, "accountId": item.account_id, "securityId": item.security_id, "sortOrder": item.sort_order}
     except Exception:
         finish_write(session, False)
@@ -522,6 +542,7 @@ def remove_watchlist(
         if item is not None:
             session.delete(item)
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
     except Exception:
         finish_write(session, False)
         raise
@@ -584,6 +605,7 @@ def record_buy(
         )
         trade = TradeLedgerService(session, actor=actor).buy(account_id=account, security_id=payload.security_id, strategy_id=strategy, executed_at=payload.executed_at, qty=payload.qty, price=payload.price, fees=fees_from(payload), client_request_id=payload.client_request_id, source=payload.source, external_trade_id=payload.external_trade_id, import_batch_id=payload.import_batch_id, memo=payload.memo, commit=False)
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return trade_data(trade)
     except Exception:
         finish_write(session, False)
@@ -744,6 +766,7 @@ def record_sell(
             commit=False,
         )
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return {**trade_data(trade), "matches": [match_data(match) for match in trade.matches]}
     except Exception:
         finish_write(session, False)
@@ -794,6 +817,7 @@ def void_trade(
         resolve_user_trade(session, trade_id, user_id=current_user.id)
         trade = TradeLedgerService(session, actor=actor).void_trade(trade_id, reason=payload.reason if payload else None, commit=False)
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return trade_data(trade)
     except Exception:
         finish_write(session, False)
@@ -1243,6 +1267,7 @@ def save_global_profit_setting(
     try:
         result = _save_setting(session, payload, user_id=current_user.id)
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return result
     except Exception:
         finish_write(session, False)
@@ -1280,6 +1305,7 @@ def save_security_profit_setting(
             session, payload, user_id=current_user.id, security_id=security_id
         )
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return result
     except Exception:
         finish_write(session, False)
@@ -1307,6 +1333,7 @@ def recalculate_security(
             strategy_id=strategy,
         )
         finish_write(session, True)
+        _notify_quote_hub_scope(session)
         return result
     except Exception:
         finish_write(session, False)
@@ -1347,6 +1374,73 @@ async def list_quotes(
             )
         )
     return {"quotes": items}
+
+
+def _format_sse_event(event: str, payload: dict[str, Any]) -> str:
+    """将事件名与 JSON 字典序列化为标准 SSE 帧文本。"""
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {encoded}\n\n"
+
+
+@router.get("/quotes/stream")
+async def stream_quotes(
+    request: Request,
+    symbols: str | None = Query(default=None),
+    account_id: str | None = Query(default=None, alias="accountId"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> StreamingResponse:
+    """建立实时行情 SSE 事件流，推送首帧快照、增量报价变动与定时保活心跳。"""
+    resolved_account_id = (
+        resolve_account(session, account_id, user_id=current_user.id)
+        if account_id is not None
+        else None
+    )
+    extra_symbols: list[str] = []
+    if symbols:
+        extra_symbols = [item.strip().upper() for item in symbols.split(",") if item.strip()]
+        if len(extra_symbols) > 50:
+            raise ValidationError(
+                "单次 SSE 临时订阅标的数不能超过 50 个",
+                details={"count": len(extra_symbols)},
+            )
+
+    subscriber, snapshot_payload = quote_hub.subscribe_client(
+        current_user.id,
+        account_id=resolved_account_id,
+        extra_symbols=extra_symbols,
+        session=session,
+    )
+
+    async def _event_generator() -> AsyncIterator[str]:
+        """持续输出首帧 snapshot、后续增量 quote/status 帧及 25 秒心跳，断连时回收订阅。"""
+        try:
+            yield _format_sse_event("snapshot", snapshot_payload)
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    item = await asyncio.wait_for(subscriber.queue.get(), timeout=25.0)
+                except TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                if item.get("event") == "__close__":
+                    break
+                yield _format_sse_event(item["event"], item["data"])
+        except asyncio.CancelledError:
+            raise
+        finally:
+            quote_hub.unsubscribe_client(subscriber.subscriber_id)
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/dashboard", response_model=DashboardRead)

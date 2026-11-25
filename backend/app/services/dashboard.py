@@ -206,15 +206,20 @@ class DashboardService:
         if mode == "cache" or not securities:
             return initial
         refresh = mode == "manual"
+        supported_symbols = [
+            self._security_symbol(security)
+            for security in securities
+            if self._provider_supports(security)
+        ]
+        hub = getattr(self.collector.service, "hub", None)
+        if mode == "auto" and hub is not None and hub.is_push_active():
+            # 内存行情中心处于活跃推流状态且全部受支持标的均有未过期快照时，零阻塞直返。
+            if hub.has_fresh_quotes(supported_symbols, now=now):
+                return initial
         if mode == "auto" and session_open:
             refresh = True
         elif mode == "auto":
             snapshots_by_symbol = {snapshot.symbol: snapshot for snapshot in initial}
-            supported_symbols = [
-                self._security_symbol(security)
-                for security in securities
-                if self._provider_supports(security)
-            ]
             has_missing = any(symbol not in snapshots_by_symbol for symbol in supported_symbols)
             has_stale = any(
                 snapshots_by_symbol[symbol].is_stale
