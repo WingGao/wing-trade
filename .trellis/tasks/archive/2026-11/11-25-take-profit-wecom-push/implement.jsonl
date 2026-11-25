@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "数据库模型、ExactDecimal 与 Alembic 迁移契约"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "持仓批次与三层止盈继承契约"}
+{"file": ".trellis/spec/frontend/mobile-high-density.md", "reason": "移动端高信息密度弹窗与零横向溢出契约"}

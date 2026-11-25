@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对迁移安全与数据库规范"}
+{"file": ".trellis/spec/frontend/mobile-high-density.md", "reason": "核对移动端弹窗与双端适配"}
