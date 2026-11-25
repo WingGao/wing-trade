@@ -263,7 +263,7 @@ return latest_price * remaining_qty - remaining_cost
 
 ### 3. Contracts
 
-- **基线与增量合并**：长桥 `PushQuote` 不含 `prev_close`，新增订阅必须先调 `ctx.quote(added)` 缓存 `LongbridgeBaseline`（含美股 `regular_close`），再用 `Decimal` 精确计算涨跌幅并过滤非正数报价。
+- **基线与增量合并**：长桥 `PushQuote` 不含 `prev_close`，新增订阅必须先调 `ctx.quote(added)` 缓存 `LongbridgeBaseline`（含美股 `regular_close`），再用 `Decimal` 精确计算涨跌幅并过滤非正数报价；长桥 Python SDK 返回的无时区 `datetime` 为系统本地时区，必须通过 `value.astimezone(UTC)` 还原为 UTC，严禁 `.replace(tzinfo=UTC)` 导致时段与 `sourceTime` 偏移。
 - **内存优先与零阻塞读取**：`QuoteService._read_raw_cached()` 优先合并内存中心与 `quote_cache` 中更新的快照；当 `MarketDataHub.is_push_active()` 且全部受支持标的均有未过期内存快照时，`DashboardService._load_snapshots(mode="auto")` 直接零阻塞返回内存快照。
 - **场外基金估算联动**：`MarketDataHub.publish()` 收到参考标的报价更新时，在内存中 `O(k)` 即时重算绑定场外基金的有效估算快照并随同广播；落盘仅写入原始官方净值与参考标的行情，绝不污染 `quote_cache`。
 - **优雅停机与测试隔离**：`MarketDataHub.stop()` 先向全部在线 SSE 订阅者发送 `__close__` 退出信号再刷盘，防止长连接阻塞停机；`create_app(create_tables=False)` 测试模式不自动连接本地 `ledger.db` 或公网推流。
@@ -284,6 +284,8 @@ return latest_price * remaining_qty - remaining_cost
 
 ### 2. Contracts
 
-- **口径与窗口**：单日振幅为 `(最高价 - 最低价) / 昨收 × 100%`（优先采信东财日 K `f58`，缺失时用前一日收盘价精确 `Decimal` 计算），严格排除当日盘中未收盘 K 线，取最近最多 20 个已收盘交易日的算术均值（不足 20 日按实际已收盘天数求平均）。
-- **市场范围**：支持 A 股（`SH`/`SZ`/`BJ`，东财日 K）与美股（`US`，东财日 K 主源 + 腾讯美股日 K 备源）；场外基金（`OF`）直接跳过并返回 `null`。
+- **口径与窗口**：单日振幅为 `(最高价 - 最低价) / 昨收 × 100%`（优先采信上游标准振幅字段或前复权常规时段日 K 精确 `Decimal` 计算），严格排除当日盘中未收盘 K 线，并过滤相邻日 K 间隔超过 30 个自然日的异常断档/占位行；取最近最多 20 个已收盘交易日的算术均值（不足 20 日按实际已收盘天数求平均）。
+- **市场与数据源路由**：支持 A 股（`SH`/`SZ`/`BJ`）与美股（`US`）；场外基金（`OF`）直接跳过并返回 `null`。
+  - 当 `quote_provider == "longbridge"` 时，复用 `LongbridgeQuoteProvider.get_daily_candlesticks()`（`Period.Day` + `AdjustType.ForwardAdjust` + `TradeSessions.Intraday`）作为 `SH`/`SZ`/`US` 主源（`longbridge-kline`），失败或空结果时自动降级回退；
+  - 美股备源优先调用腾讯美股日 K 接口（按 `105->.OQ` / `106->.N` / `107->.AM` 交易所后缀映射与探测，命中后写回 `USMarketResolver`），失败时再回退东方财富美股日 K；A 股备源调用东方财富日 K。
 - **缓存与防打爆**：按各市场理论最新已收盘交易日判断 `security_daily_metrics` 新鲜度，同一已收盘交易日内零上游请求；进程内维护 30 分钟失败/节假日冷却与并发上限（4）、批量超时（4s）；`quote_provider == "mock"` 与 `mode == "cache"` 下严禁访问公网。

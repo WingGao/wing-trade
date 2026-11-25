@@ -256,3 +256,113 @@ def test_service_failure_cooldown_prevents_repeated_upstream_calls() -> None:
         )
         assert res2 == {}
         assert calls == 1
+
+
+def test_longbridge_kline_primary_for_us_and_ashare_with_fallback() -> None:
+    """配置长桥日 K 主源时美股与沪深 A 股优先走长桥并排除当日未收盘，失败时自动回退备源。"""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FakeCandle:
+        """模拟长桥 Candlestick 结构。"""
+
+        timestamp: datetime
+        close: Decimal
+        high: Decimal
+        low: Decimal
+
+    lb_calls: list[tuple[str, int]] = []
+    http_calls: list[str] = []
+
+    def fake_lb_fetcher(symbol: str, count: int) -> list[_FakeCandle]:
+        """按证券返回模拟长桥日 K（US:AAPL 正常，US:VOO 抛错以触发回退）。"""
+        lb_calls.append((symbol, count))
+        if symbol == "US:AAPL":
+            # 美东 2026-11-23(昨收100) / 2026-11-24(高105低100 -> 5%) / 2026-11-25盘中(高200低100 -> 应排除)
+            return [
+                _FakeCandle(datetime(2026, 11, 23, 21, 0, tzinfo=UTC), Decimal("100"), Decimal("101"), Decimal("99")),
+                _FakeCandle(datetime(2026, 11, 24, 21, 0, tzinfo=UTC), Decimal("102"), Decimal("105"), Decimal("100")),
+                _FakeCandle(datetime(2026, 11, 25, 15, 0, tzinfo=UTC), Decimal("150"), Decimal("200"), Decimal("100")),
+            ]
+        raise RuntimeError("longbridge unavailable")
+
+    def fake_transport(request: Request, _timeout: float) -> bytes:
+        """仅对腾讯 usVOO.AM 返回完整 qfqday，模拟 .OQ/.N 未命中并探测到 .AM。"""
+        http_calls.append(request.full_url)
+        if "usVOO.AM" in request.full_url:
+            payload = {
+                "data": {
+                    "usVOO.AM": {
+                        "qfqday": [
+                            ["2026-11-20", "100.00", "100.00", "101.00", "99.00", "1000"],
+                            ["2026-11-23", "100.00", "100.00", "103.00", "99.00", "1000"],
+                            ["2026-11-24", "100.00", "100.00", "102.00", "98.00", "1000"],
+                        ]
+                    }
+                }
+            }
+            return json.dumps(payload).encode("utf-8")
+        # 其余后缀返回单日记录，模拟腾讯未命中正确交易所
+        return json.dumps({"data": {"usVOO.OQ": {"day": [["2026-11-24", "100", "100", "101", "99", "100"]]}}}).encode("utf-8")
+
+    provider = DailyAmplitudeProvider(
+        transport=fake_transport,
+        longbridge_kline_fetcher=fake_lb_fetcher,
+    )
+    now_us_intraday = datetime(2026, 11, 25, 15, 30, tzinfo=UTC)  # 美东 10:30 盘中
+
+    snap_aapl = provider.fetch_avg_amplitude("US:AAPL", now=now_us_intraday)
+    assert snap_aapl is not None
+    assert snap_aapl.provider == "longbridge-kline"
+    assert snap_aapl.sample_days == 1
+    assert snap_aapl.as_of_date == "2026-11-24"
+    assert snap_aapl.avg_amplitude_20d == Decimal("5.000000")
+    assert http_calls == []
+
+    snap_voo = provider.fetch_avg_amplitude("US:VOO", now=now_us_intraday)
+    assert snap_voo is not None
+    assert snap_voo.provider == "tencent-us-kline"
+    assert snap_voo.sample_days == 2
+    assert snap_voo.as_of_date == "2026-11-24"
+    assert snap_voo.avg_amplitude_20d == Decimal("4.000000")
+    # 命中 .AM 后已记忆交易所编号 107
+    assert provider._us_resolver.get_cached("VOO") == "107"
+
+
+def test_tencent_us_filters_stale_placeholder_gap_and_router_extracts_longbridge() -> None:
+    """腾讯无历史序列仅返回 2011 占位行+当日时不得产出失真振幅，且 router 正确提取长桥日 K 拉取器。"""
+    from app.api.v1.router import _extract_longbridge_kline_fetcher
+    from app.market_data.longbridge_adapter import (
+        LongbridgeCredentials,
+        LongbridgeQuoteProvider,
+        PriorityFallbackQuoteProvider,
+    )
+
+    def fake_transport(request: Request, _timeout: float) -> bytes:
+        """模拟腾讯无后缀返回 2011-06-02 占位行 + 2026-11-24 当日行，且东财断连。"""
+        if "push2his.eastmoney.com" in request.full_url or "searchapi.eastmoney.com" in request.full_url:
+            raise OSError("eastmoney disconnected")
+        if "usNVDA%2C" in request.full_url or "usNVDA," in request.full_url:
+            payload = {
+                "data": {
+                    "usNVDA": {
+                        "day": [
+                            ["2011-06-02", "19.02", "19.02", "19.28", "18.84", "1000"],
+                            ["2026-11-24", "159.10", "155.38", "159.92", "150.50", "1000"],
+                        ]
+                    }
+                }
+            }
+            return json.dumps(payload).encode("utf-8")
+        return json.dumps({"data": {}}).encode("utf-8")
+
+    provider = DailyAmplitudeProvider(transport=fake_transport)
+    snap = provider.fetch_avg_amplitude("US:NVDA", now=datetime(2026, 11, 25, 15, 0, tzinfo=UTC))
+    # 2011 与 2026 间隔远超 30 天，必须被过滤，不能算出 49.53% 失真值
+    assert snap is None
+
+    lb = LongbridgeQuoteProvider(LongbridgeCredentials(app_key="k", app_secret="s", access_token="t"))
+    wrapped = PriorityFallbackQuoteProvider(lb, MockQuoteProvider(), name="longbridge")
+    assert _extract_longbridge_kline_fetcher(wrapped) is not None
+    assert _extract_longbridge_kline_fetcher(lb) is not None
+    assert _extract_longbridge_kline_fetcher(MockQuoteProvider()) is None

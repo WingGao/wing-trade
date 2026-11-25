@@ -299,3 +299,96 @@ def test_factory_creates_longbridge_provider_without_network() -> None:
     assert isinstance(provider, PriorityFallbackQuoteProvider)
     assert provider.name == "longbridge"
     assert provider.health().healthy is True
+
+
+def test_longbridge_provider_get_daily_candlesticks_and_error_recovery() -> None:
+    """长桥日 K 拉取应正确映射代码、跳过不支持市场，并在异常后重置上下文。"""
+    import pytest
+
+    @dataclass
+    class _FakeCandlestick:
+        """模拟长桥日 K 线对象。"""
+
+        timestamp: datetime
+        open: Decimal
+        high: Decimal
+        low: Decimal
+        close: Decimal
+
+    class _CandleCtx(_FakeQuoteContext):
+        """扩展支持 candlesticks 调用记录与故障注入的模拟上下文。"""
+
+        def __init__(self, *, fail_once: bool = False) -> None:
+            """初始化日 K 调用记录与故障标志。"""
+            super().__init__({})
+            self.fail_once = fail_once
+            self.candle_calls: list[tuple[Any, ...]] = []
+
+        def candlesticks(self, *args: Any) -> list[_FakeCandlestick]:
+            """记录参数并返回模拟日 K，或按需抛出异常。"""
+            self.candle_calls.append(args)
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("socket closed")
+            return [
+                _FakeCandlestick(
+                    timestamp=datetime(2026, 11, 24, 5, 0, tzinfo=UTC),
+                    open=Decimal("100"),
+                    high=Decimal("105"),
+                    low=Decimal("99"),
+                    close=Decimal("102"),
+                )
+            ]
+
+    created_ctxs: list[_CandleCtx] = []
+
+    def _factory(_creds: LongbridgeCredentials) -> tuple[_CandleCtx, type[_FakeSubType]]:
+        """每次建连创建新的模拟上下文（首次模拟断连，二次成功）。"""
+        ctx = _CandleCtx(fail_once=len(created_ctxs) == 0)
+        created_ctxs.append(ctx)
+        return ctx, _FakeSubType
+
+    creds = LongbridgeCredentials(app_key="k", app_secret="s", access_token="t")
+    provider = LongbridgeQuoteProvider(creds, context_factory=_factory)
+
+    # 不支持的市场直接返回空，不建连
+    assert provider.get_daily_candlesticks("BJ:430047", count=25) == []
+    assert provider.get_daily_candlesticks("OF:000300", count=25) == []
+    assert len(created_ctxs) == 0
+
+    # 首次调用失败应抛出异常并清空 _ctx
+    with pytest.raises(RuntimeError, match="socket closed"):
+        provider.get_daily_candlesticks("US:AAPL", count=25)
+    assert len(created_ctxs) == 1
+    assert created_ctxs[0].candle_calls[0][0] == "AAPL.US"
+    assert created_ctxs[0].candle_calls[0][2] == 25
+
+    # 第二次调用应自动重建上下文并成功返回日 K
+    candles = provider.get_daily_candlesticks("US:AAPL", count=25)
+    assert len(created_ctxs) == 2
+    assert len(candles) == 1
+    assert candles[0].close == Decimal("102")
+
+
+def test_longbridge_naive_local_timestamp_converts_to_utc_and_keeps_us_regular_session() -> None:
+    """长桥 SDK 返回的本地无时区 datetime 应按系统本地时区转 UTC，避免美股盘中被误判为盘后。"""
+    # 2026-11-25 14:35 UTC = 美东 09:35 EST（常规盘中），在 UTC+8 下本地 naive 时间为 22:35
+    actual_utc = datetime(2026, 11, 25, 14, 35, 29, tzinfo=UTC)
+    naive_local = actual_utc.astimezone().replace(tzinfo=None)
+
+    parsed = parse_security_quote(
+        _FakeSecurityQuote(
+            symbol="AAPL.US",
+            last_done=Decimal("350.57"),
+            prev_close=Decimal("354.07"),
+            timestamp=naive_local,
+        ),
+        fetched_at=actual_utc,
+        a_calendar=AShareTradingCalendar(),
+        us_calendar=USTradingCalendar(),
+    )
+    assert parsed is not None
+    canonical, snapshot, _ = parsed
+    assert canonical == "US:AAPL"
+    assert snapshot.source_time == actual_utc
+    assert snapshot.market_session == "regular"

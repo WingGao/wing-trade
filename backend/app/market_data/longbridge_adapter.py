@@ -101,12 +101,11 @@ def _to_optional_decimal(value: Any, *, field_name: str) -> Decimal | None:
 
 
 def _normalize_timestamp(value: Any) -> datetime | None:
-    """将长桥时间戳（datetime 或 Unix 秒）规整为 UTC datetime。"""
+    """将长桥时间戳（本地 naive datetime、带时区 datetime 或 Unix 秒）规整为 UTC datetime。"""
     if value is None:
         return None
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
+        # 长桥 Python SDK 返回的无时区 datetime 为系统本地时区，直接 astimezone(UTC) 可精确还原 UTC。
         return value.astimezone(UTC)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if value <= 0:
@@ -437,6 +436,53 @@ class LongbridgeQuoteProvider:
                     canonical, snapshot, _ = parsed
                     result[canonical] = snapshot
         return result
+
+    def get_daily_candlesticks(
+        self,
+        symbol: str,
+        *,
+        count: int = 25,
+    ) -> list[Any]:
+        """拉取单只受支持证券最近 count 根常规交易时段前复权日 K 线。"""
+        if count <= 0:
+            return []
+        lb_symbol = to_longbridge_symbol(symbol)
+        if lb_symbol is None:
+            return []
+
+        try:
+            openapi = importlib.import_module("longbridge.openapi")
+            period_day = getattr(openapi, "Period").Day
+            adjust_forward = getattr(openapi, "AdjustType").ForwardAdjust
+            sessions_intraday = getattr(openapi, "TradeSessions").Intraday
+        except Exception:
+            period_day = "Day"
+            adjust_forward = "ForwardAdjust"
+            sessions_intraday = "Intraday"
+
+        ctx = self._get_context()
+        try:
+            try:
+                items = ctx.candlesticks(
+                    lb_symbol,
+                    period_day,
+                    count,
+                    adjust_forward,
+                    sessions_intraday,
+                )
+            except TypeError:
+                items = ctx.candlesticks(
+                    lb_symbol,
+                    period_day,
+                    count,
+                    adjust_forward,
+                )
+        except Exception:
+            # 建连/凭据异常时清空缓存上下文，便于下次重建。
+            with self._lock:
+                self._ctx = None
+            raise
+        return list(items or [])
 
     def health(self) -> ProviderHealth:
         """报告长桥静态凭据已完成配置，不在健康检查时发起公网请求。"""

@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request
 
@@ -20,6 +21,10 @@ from app.domain.precision import ensure_decimal, round_price
 from app.models.ledger import Security, SecurityDailyMetric
 
 from .calendar import AShareTradingCalendar, USTradingCalendar
+from .longbridge_adapter import (
+    _normalize_timestamp as normalize_longbridge_timestamp,
+    is_longbridge_supported_symbol,
+)
 from .provider import (
     EastmoneyQuoteProvider,
     USMarketResolver,
@@ -32,6 +37,10 @@ logger = logging.getLogger("ashare_ledger.market_data.amplitude")
 _ASHARE_MARKETS = frozenset({"SH", "SZ", "BJ"})
 _US_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,11}$")
 _US_UPSTREAM_MARKETS = ("105", "106", "107")
+_US_MARKET_TO_TENCENT_SUFFIX = {"105": ".OQ", "106": ".N", "107": ".AM"}
+_TENCENT_SUFFIX_TO_US_MARKET = {".OQ": "105", ".N": "106", ".AM": "107"}
+_TENCENT_US_SUFFIX_ORDER = (".OQ", ".N", ".AM")
+_MAX_CONSECUTIVE_GAP_DAYS = 30
 _DEFAULT_WINDOW_DAYS = 20
 
 
@@ -58,7 +67,7 @@ class DailyAmplitudeSnapshot:
 
 
 class DailyAmplitudeProvider:
-    """从东方财富（A 股/美股主源）及腾讯（美股备源）拉取日 K 线并计算近 20 日已收盘平均振幅。"""
+    """从长桥（主源）、腾讯（美股备源）及东方财富拉取日 K 线并计算近 20 日已收盘平均振幅。"""
 
     _eastmoney_kline_url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     _tencent_us_kline_url = "https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get"
@@ -73,8 +82,9 @@ class DailyAmplitudeProvider:
         a_calendar: AShareTradingCalendar | None = None,
         us_calendar: USTradingCalendar | None = None,
         us_resolver: USMarketResolver | None = None,
+        longbridge_kline_fetcher: Callable[[str, int], Sequence[Any]] | None = None,
     ) -> None:
-        """初始化日 K 线拉取器，支持测试注入传输层、时钟与美股交易所解析器。"""
+        """初始化日 K 线拉取器，支持注入长桥日 K 拉取器、传输层、时钟与美股交易所解析器。"""
         timeout = (
             Decimal(str(timeout_seconds))
             if isinstance(timeout_seconds, float)
@@ -96,6 +106,7 @@ class DailyAmplitudeProvider:
                 else shared_us_market_resolver()
             )
         )
+        self._longbridge_kline_fetcher = longbridge_kline_fetcher
 
     @staticmethod
     def supports_symbol(symbol: str) -> bool:
@@ -248,14 +259,87 @@ class DailyAmplitudeProvider:
                 result.append((bar_date, amplitude))
         return result
 
-    def _fetch_tencent_us_kline_bars(
+    @staticmethod
+    def _compute_amplitudes_from_ohlc(
+        raw_rows: Mapping[date, tuple[Decimal, Decimal, Decimal]],
+    ) -> list[tuple[date, Decimal]]:
+        """按日期升序由 (收盘, 最高, 最低) 计算每日振幅，并过滤跨年断档占位行。"""
+        result: list[tuple[date, Decimal]] = []
+        prev_date: date | None = None
+        prev_close: Decimal | None = None
+        for bar_date in sorted(raw_rows):
+            close_price, high_price, low_price = raw_rows[bar_date]
+            if (
+                prev_close is not None
+                and prev_close > 0
+                and prev_date is not None
+                and (bar_date - prev_date).days <= _MAX_CONSECUTIVE_GAP_DAYS
+            ):
+                amplitude = (high_price - low_price) / prev_close * Decimal("100")
+                if amplitude >= 0:
+                    result.append((bar_date, amplitude))
+            prev_date = bar_date
+            prev_close = close_price
+        return result
+
+    def _fetch_longbridge_kline_bars(
         self,
-        code: str,
+        canonical: str,
+        *,
+        market: str,
+        limit: int,
+    ) -> list[tuple[date, Decimal]]:
+        """通过长桥日 K 拉取器解析每日振幅序列（按日期升序）。"""
+        if self._longbridge_kline_fetcher is None:
+            return []
+        candles = self._longbridge_kline_fetcher(canonical, limit)
+        if not candles:
+            return []
+
+        market_tz = (
+            self.us_calendar.timezone
+            if market.upper() == "US"
+            else self.a_calendar.timezone
+        )
+        raw_rows: dict[date, tuple[Decimal, Decimal, Decimal]] = {}
+        for item in candles:
+            ts = normalize_longbridge_timestamp(getattr(item, "timestamp", None))
+            if ts is None:
+                continue
+            bar_date = ts.astimezone(market_tz).date()
+            try:
+                close_price = EastmoneyQuoteProvider._optional_decimal(
+                    getattr(item, "close", None), field_name="close"
+                )
+                high_price = EastmoneyQuoteProvider._optional_decimal(
+                    getattr(item, "high", None), field_name="high"
+                )
+                low_price = EastmoneyQuoteProvider._optional_decimal(
+                    getattr(item, "low", None), field_name="low"
+                )
+            except (TypeError, ValueError):
+                continue
+            if (
+                close_price is None
+                or high_price is None
+                or low_price is None
+                or close_price <= 0
+                or high_price <= 0
+                or low_price <= 0
+                or high_price < low_price
+            ):
+                continue
+            raw_rows[bar_date] = (close_price, high_price, low_price)
+        return self._compute_amplitudes_from_ohlc(raw_rows)
+
+    def _fetch_tencent_us_kline_single(
+        self,
+        tencent_symbol: str,
         *,
         limit: int,
     ) -> list[tuple[date, Decimal]]:
-        """从腾讯美股日 K 线接口拉取并按 (高-低)/昨收×100% 计算每日振幅（按日期升序）。"""
-        query = urlencode({"param": f"us{code},day,,,{limit},qfq"})
+        """请求单个腾讯美股代码（如 usAAPL.OQ 或 usVOO）的日 K 并解析有效振幅列表。"""
+        query = urlencode({"param": f"{tencent_symbol},day,,,{limit},qfq"})
         payload = self._request_json(
             f"{self._tencent_us_kline_url}?{query}",
             referer="https://gu.qq.com/",
@@ -263,7 +347,7 @@ class DailyAmplitudeProvider:
         data = payload.get("data")
         if not isinstance(data, Mapping):
             return []
-        symbol_node = data.get(f"us{code}")
+        symbol_node = data.get(tencent_symbol)
         if not isinstance(symbol_node, Mapping):
             return []
         rows = symbol_node.get("qfqday") or symbol_node.get("day")
@@ -294,17 +378,37 @@ class DailyAmplitudeProvider:
             ):
                 continue
             raw_rows[bar_date] = (close_price, high_price, low_price)
+        return self._compute_amplitudes_from_ohlc(raw_rows)
 
-        result: list[tuple[date, Decimal]] = []
-        prev_close: Decimal | None = None
-        for bar_date in sorted(raw_rows):
-            close_price, high_price, low_price = raw_rows[bar_date]
-            if prev_close is not None and prev_close > 0:
-                amplitude = (high_price - low_price) / prev_close * Decimal("100")
-                if amplitude >= 0:
-                    result.append((bar_date, amplitude))
-            prev_close = close_price
-        return result
+    def _fetch_tencent_us_kline_bars(
+        self,
+        code: str,
+        *,
+        limit: int,
+        preferred_market: str | None = None,
+    ) -> list[tuple[date, Decimal]]:
+        """从腾讯美股日 K 线接口按交易所后缀（.OQ/.N/.AM）探测拉取并计算每日振幅。"""
+        suffixes: list[str] = []
+        if preferred_market and preferred_market in _US_MARKET_TO_TENCENT_SUFFIX:
+            suffixes.append(_US_MARKET_TO_TENCENT_SUFFIX[preferred_market])
+        for suffix in _TENCENT_US_SUFFIX_ORDER:
+            if suffix not in suffixes:
+                suffixes.append(suffix)
+
+        for suffix in suffixes:
+            try:
+                bars = self._fetch_tencent_us_kline_single(f"us{code}{suffix}", limit=limit)
+            except Exception:
+                bars = []
+            if bars:
+                self._us_resolver.remember(code, _TENCENT_SUFFIX_TO_US_MARKET[suffix])
+                return bars
+
+        # 兼容无后缀返回连续历史 K 线的标的或测试替身（单日与跨年占位行已由间隔校验过滤）。
+        try:
+            return self._fetch_tencent_us_kline_single(f"us{code}", limit=limit)
+        except Exception:
+            return []
 
     def _fetch_bars_for_symbol(
         self,
@@ -312,14 +416,36 @@ class DailyAmplitudeProvider:
         *,
         limit: int,
     ) -> tuple[list[tuple[date, Decimal]], str]:
-        """按市场路由拉取单只证券的日 K 振幅序列，美股支持东财失败时回退腾讯源。"""
+        """按市场路由拉取单只证券的日 K 振幅序列：长桥优先，美股备源优先腾讯带后缀并回退东财。"""
         market, code = canonical.split(":", 1)
+
+        if self._longbridge_kline_fetcher is not None and is_longbridge_supported_symbol(canonical):
+            try:
+                lb_bars = self._fetch_longbridge_kline_bars(canonical, market=market, limit=limit)
+            except Exception as exc:
+                logger.warning(
+                    "longbridge daily kline fetch failed",
+                    extra={"symbol": canonical, "error_type": type(exc).__name__},
+                )
+                lb_bars = []
+            if lb_bars:
+                return lb_bars, "longbridge-kline"
+
         if market in _ASHARE_MARKETS:
             upstream_market = 1 if market == "SH" else 0
             bars = self._fetch_eastmoney_kline_bars(f"{upstream_market}.{code}", limit=limit)
             return bars, "eastmoney-kline"
 
-        # 美股：优先通过解析器定位交易所编号拉取东财日 K，失败或无数据时回退腾讯美股日 K。
+        # 美股备源：优先走腾讯带交易所后缀的日 K（无需先查东财名表，更稳定）；失败时再回退东财。
+        cached_market = self._us_resolver.get_cached(code)
+        bars = self._fetch_tencent_us_kline_bars(
+            code,
+            limit=limit,
+            preferred_market=cached_market,
+        )
+        if bars:
+            return bars, "tencent-us-kline"
+
         resolved_market = self._us_resolver.resolve(
             code,
             transport=self._transport,
@@ -335,8 +461,7 @@ class DailyAmplitudeProvider:
                 self._us_resolver.remember(code, candidate)
                 return bars, "eastmoney-us-kline"
 
-        bars = self._fetch_tencent_us_kline_bars(code, limit=limit)
-        return bars, "tencent-us-kline"
+        return [], "eastmoney-us-kline"
 
     def fetch_avg_amplitude(
         self,

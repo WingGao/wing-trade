@@ -58,6 +58,10 @@ from app.market_data import (
     QuoteCollector,
     create_quote_provider,
 )
+from app.market_data.longbridge_adapter import (
+    LongbridgeQuoteProvider,
+    PriorityFallbackQuoteProvider,
+)
 from app.models.auth import User
 from app.models.ledger import (
     Account,
@@ -84,9 +88,26 @@ from app.services.profit_settings import ProfitSettingsService
 from app.services.recalculate import RecalculationService
 from app.services.target import TargetService
 
+def _extract_longbridge_kline_fetcher(provider: Any) -> Any:
+    """若当前行情源包含长桥主源，返回其可复用的日 K 线拉取方法。"""
+    lb_provider: LongbridgeQuoteProvider | None = None
+    if isinstance(provider, LongbridgeQuoteProvider):
+        lb_provider = provider
+    elif isinstance(provider, PriorityFallbackQuoteProvider) and isinstance(
+        provider.primary, LongbridgeQuoteProvider
+    ):
+        lb_provider = provider.primary
+    if lb_provider is None:
+        return None
+    return lambda symbol, count: lb_provider.get_daily_candlesticks(symbol, count=count)
+
+
 quote_collector = QuoteCollector(create_quote_provider())
 daily_amplitude_service = DailyAmplitudeService(
-    provider=DailyAmplitudeProvider(timeout_seconds=settings.quote_timeout_seconds),
+    provider=DailyAmplitudeProvider(
+        timeout_seconds=settings.quote_timeout_seconds,
+        longbridge_kline_fetcher=_extract_longbridge_kline_fetcher(quote_collector.provider),
+    ),
     network_enabled=settings.quote_provider != "mock",
 )
 quote_hub = MarketDataHub(
