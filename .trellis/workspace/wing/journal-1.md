@@ -578,3 +578,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: 实现三层止盈实时检测与企业微信 Webhook 推送
+<!-- trellis-session: v=2 fp=fd44700ec191d1e6 -->
+
+**Date**: 2026-11-25
+**Task**: 实现三层止盈实时检测与企业微信 Webhook 推送
+**Branch**: `master`
+
+### Summary
+
+新增 notification_channels 与 profit_alert_deliveries 表及 0006 无损迁移，实现可扩展推送通道抽象、企业微信 Webhook 校验/脱敏/Markdown 聚合渲染、按用户隔离配置与一键测试接口、接入 MarketDataHub 的三层止盈自然日去重评估引擎，以及总览桌面端/移动端推送设置弹窗。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `df94672` | feat(backend): 新增三层止盈实时检测引擎与企业微信 Webhook 推送通道 |
+| `2006fc8` | feat(frontend): 总览新增企微止盈推送设置弹窗与测试入口 |
+
+### Status
+
+[OK] **Completed**
