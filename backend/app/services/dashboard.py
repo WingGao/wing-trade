@@ -66,6 +66,11 @@ class DashboardService:
             now=current,
         )
         snapshots_by_symbol = {snapshot.symbol: snapshot for snapshot in snapshots}
+        latest_sells = self._latest_active_sells(
+            session,
+            account_id=account_id,
+            security_ids={security_id for security_id, _ in groups},
+        )
         positions = [
             self._position_data(
                 session,
@@ -74,6 +79,7 @@ class DashboardService:
                 strategy_id=strategy_id,
                 lots=group,
                 snapshots_by_symbol=snapshots_by_symbol,
+                last_sell_trade=latest_sells.get((security_id, strategy_id)),
             )
             for (security_id, strategy_id), group in sorted(
                 groups.items(), key=lambda item: self._group_sort_key(session, item[0])
@@ -235,6 +241,41 @@ class DashboardService:
             refresh = has_missing or (has_stale and refresh_due)
         return await self.collector.collect(session, securities, refresh=refresh, now=now)
 
+    def _latest_active_sells(
+        self,
+        session: Session,
+        *,
+        account_id: str,
+        security_ids: set[str],
+    ) -> dict[tuple[str, str], Trade]:
+        """批量查询账户各证券与策略范围内最近一笔有效卖出成交（跨持仓周期）。"""
+        if not security_ids:
+            return {}
+        sell_trades = list(
+            session.scalars(
+                select(Trade)
+                .where(
+                    Trade.account_id == account_id,
+                    Trade.security_id.in_(security_ids),
+                    Trade.side == TradeSide.SELL.value,
+                    Trade.status == TradeStatus.ACTIVE.value,
+                )
+                .order_by(Trade.executed_at.desc(), Trade.created_at.desc(), Trade.id.desc())
+            )
+        )
+        latest_by_scope: dict[tuple[str, str], Trade] = {}
+        for trade in sell_trades:
+            key = (trade.security_id, trade.strategy_id)
+            existing = latest_by_scope.get(key)
+            if existing is None or self._trade_order_key(trade) > self._trade_order_key(existing):
+                latest_by_scope[key] = trade
+        return latest_by_scope
+
+    @classmethod
+    def _trade_order_key(cls, trade: Trade) -> tuple[datetime, datetime, str]:
+        """生成统一带 UTC 时区的成交先后比较键，避免无时区时间比较异常。"""
+        return (cls._as_utc(trade.executed_at), cls._as_utc(trade.created_at), trade.id)
+
     def _position_data(
         self,
         session: Session,
@@ -244,6 +285,7 @@ class DashboardService:
         strategy_id: str,
         lots: Sequence[Lot],
         snapshots_by_symbol: dict[str, QuoteSnapshot],
+        last_sell_trade: Trade | None = None,
     ) -> dict[str, Any]:
         """构建单个证券策略持仓行及其固定行情估值。"""
         security = session.get(Security, security_id)
@@ -282,7 +324,8 @@ class DashboardService:
             cycle_metrics = CycleService.cycle_cash_metrics(session, cycle_id)
             buy_cash += cycle_metrics["total_buy_cash_out"] or Decimal("0")
             sell_cash += cycle_metrics["total_sell_cash_in"] or Decimal("0")
-        latest_price = snapshot.last_price if snapshot is not None and open_lots else None
+        quote_price = snapshot.last_price if snapshot is not None else None
+        latest_price = quote_price if open_lots else None
         metrics = AccountingService.position_metrics(
             open_lots,
             latest_price=latest_price,
@@ -297,6 +340,13 @@ class DashboardService:
             security_id=security_id,
             strategy_id=strategy_id,
         )
+        last_sell_price = last_sell_trade.price if last_sell_trade is not None else None
+        last_sell_executed_at = (
+            to_beijing(last_sell_trade.executed_at)
+            if last_sell_trade is not None
+            else None
+        )
+        vs_last_sell_pct = AccountingService.price_diff_pct(quote_price, last_sell_price)
         return {
             "securityId": security_id,
             "market": security.market if security is not None else None,
@@ -313,6 +363,9 @@ class DashboardService:
             "unrealizedReturnPct": metrics.unrealized_return_pct,
             "strategyBreakevenPrice": metrics.strategy_breakeven_price,
             "fundsRecoveredSurplus": metrics.funds_recovered_surplus,
+            "lastSellPrice": last_sell_price,
+            "lastSellExecutedAt": last_sell_executed_at,
+            "vsLastSellPct": vs_last_sell_pct,
             "quote": self._quote_data(security, snapshot)
             if security is not None and snapshot
             else None,

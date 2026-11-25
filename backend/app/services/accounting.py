@@ -164,6 +164,20 @@ class AccountingService:
         return round_price(ensure_decimal(profit) / denominator * Decimal("100"))
 
     @staticmethod
+    def price_diff_pct(
+        current_price: object | None,
+        reference_price: object | None,
+    ) -> Decimal | None:
+        """计算当前价格相对参考价格的涨跌幅百分比，缺少价格或参考价非正时返回空。"""
+        if current_price is None or reference_price is None:
+            return None
+        current = round_price(current_price)
+        reference = round_price(reference_price)
+        if current <= 0 or reference <= 0:
+            return None
+        return round_price((current - reference) / reference * Decimal("100"))
+
+    @staticmethod
     def lowest_price_group_metrics(
         lots: Iterable[object],
         *,

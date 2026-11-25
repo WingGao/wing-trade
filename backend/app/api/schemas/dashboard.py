@@ -63,6 +63,9 @@ class DashboardPositionRead(APIModel):
     unrealized_return_pct: Decimal | None = None
     strategy_breakeven_price: Decimal | None = None
     funds_recovered_surplus: Decimal | None = None
+    last_sell_price: Decimal | None = None
+    last_sell_executed_at: datetime | None = None
+    vs_last_sell_pct: Decimal | None = None
     quote: QuoteRead | None = None
     lowest_price_group: LowestPriceGroupRead | None = None
 

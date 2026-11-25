@@ -180,6 +180,9 @@ def test_lots_include_partial_sale_pnl_quote_and_descending_order(ledger_context
             "remainingCost": "81.0000",
             "realizedPnl": "9.0000",
             "unrealizedPnl": "15.0000",
+            "lastSellPrice": "12.000000",
+            "lastSellExecutedAt": "2026-11-03T08:00:00+08:00",
+            "vsLastSellPct": "0.000000",
         }
         assert body["quote"]["provider"] == "test"
         assert Decimal(body["lots"][0]["unrealizedPnl"]) == Decimal("1")
@@ -222,6 +225,9 @@ def test_lots_summary_ignores_closed_lots_and_preserves_null_quote(ledger_contex
             "remainingCost": "22.0000",
             "realizedPnl": "22.0000",
             "unrealizedPnl": "2.0000",
+            "lastSellPrice": "12.000000",
+            "lastSellExecutedAt": "2026-11-04T08:00:00+08:00",
+            "vsLastSellPct": "0.000000",
         }
         assert active_only.json()["realizedPnl"] == summary["realizedPnl"]
 
@@ -235,7 +241,7 @@ def test_lots_summary_ignores_closed_lots_and_preserves_null_quote(ledger_contex
         session.delete(quote_row)
         session.commit()
         without_quote = client.get(url).json()["summary"]
-        assert without_quote == {**summary, "unrealizedPnl": None}
+        assert without_quote == {**summary, "unrealizedPnl": None, "vsLastSellPct": None}
 
         session.add(
             QuoteCache(
@@ -255,6 +261,9 @@ def test_lots_summary_ignores_closed_lots_and_preserves_null_quote(ledger_contex
             "remainingCost": "0.0000",
             "realizedPnl": "24.0000",
             "unrealizedPnl": None,
+            "lastSellPrice": "12.000000",
+            "lastSellExecutedAt": "2026-11-05T08:00:00+08:00",
+            "vsLastSellPct": "0.000000",
         }
 
 

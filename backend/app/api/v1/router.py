@@ -922,11 +922,31 @@ def list_lots(
         latest_price=snapshot.last_price if snapshot is not None and open_lots else None,
         realized_pnl=realized,
     )
+    last_sell = session.scalar(
+        select(Trade)
+        .where(
+            Trade.account_id == account,
+            Trade.security_id == security_id,
+            Trade.strategy_id == strategy,
+            Trade.side == TradeSide.SELL.value,
+            Trade.status == TradeStatus.ACTIVE.value,
+        )
+        .order_by(Trade.executed_at.desc(), Trade.created_at.desc(), Trade.id.desc())
+        .limit(1)
+    )
+    last_sell_price = last_sell.price if last_sell is not None else None
+    vs_last_sell_pct = AccountingService.price_diff_pct(
+        snapshot.last_price if snapshot is not None else None,
+        last_sell_price,
+    )
     summary = {
         "remainingQty": _fmt(summary_metrics.remaining_qty),
         "remainingCost": _fmt(summary_metrics.remaining_cost),
         "realizedPnl": _fmt(summary_metrics.realized_pnl),
         "unrealizedPnl": _fmt(summary_metrics.unrealized_pnl),
+        "lastSellPrice": _fmt(last_sell_price, 6),
+        "lastSellExecutedAt": _dt(last_sell.executed_at) if last_sell is not None else None,
+        "vsLastSellPct": _fmt(vs_last_sell_pct, 6),
     }
     quote = None if snapshot is None else quote_snapshot_data(security, snapshot, utc_time=True)
     rows = []
