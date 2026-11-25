@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
+import { nowBeijingPickerValue, toAwareBeijingIso } from '../utils/time'
 import { useViewport } from '../utils/viewport'
 const props = defineProps<{ securityId: string; accountId?: string; currency?: string; isFund?: boolean }>()
 const emit = defineEmits<{ saved: [] }>()
@@ -10,11 +11,14 @@ const { isMobile } = useViewport()
 const saving = ref(false)
 const isUS = computed(() => props.currency === 'USD')
 const allowDecimalQty = computed(() => Boolean(props.isFund) || isUS.value)
-const form = reactive({ qty: '', price: '', executedAt: new Date().toISOString().slice(0, 16), commission: '', stampDuty: '', transferFee: '', otherFee: '' })
+const form = reactive({ qty: '', price: '', executedAt: nowBeijingPickerValue(), commission: '', stampDuty: '', transferFee: '', otherFee: '' })
+watch(visible, (open) => {
+  if (open) form.executedAt = nowBeijingPickerValue()
+})
 /** 提交买入成交记录并在成功后通知父组件刷新。 */
 async function submit() {
   saving.value = true
-  try { await api.buy({ accountId: props.accountId, securityId: props.securityId, qty: form.qty, price: form.price, executedAt: new Date(form.executedAt).toISOString(), commission: form.commission || '0', stampDuty: form.stampDuty || '0', transferFee: form.transferFee || '0', otherFee: form.otherFee || '0', clientRequestId: crypto.randomUUID() }); ElMessage.success('买入已记账'); visible.value = false; emit('saved') }
+  try { await api.buy({ accountId: props.accountId, securityId: props.securityId, qty: form.qty, price: form.price, executedAt: toAwareBeijingIso(form.executedAt), commission: form.commission || '0', stampDuty: form.stampDuty || '0', transferFee: form.transferFee || '0', otherFee: form.otherFee || '0', clientRequestId: crypto.randomUUID() }); ElMessage.success('买入已记账'); visible.value = false; emit('saved') }
   catch (error) { ElMessage.error(error instanceof Error ? error.message : '买入失败') }
   finally { saving.value = false }
 }

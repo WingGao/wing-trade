@@ -109,6 +109,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../api/client'
 import type { AuthUser, UserStatus } from '../api/types'
 import { useAuthStore } from '../stores/auth'
+import { formatDateTime } from '../utils/format'
 
 const auth = useAuthStore()
 const users = ref<AuthUser[]>([])
@@ -130,13 +131,6 @@ function statusTagType(status: UserStatus): 'success' | 'warning' | 'danger' {
   if (status === 'ACTIVE') return 'success'
   if (status === 'INVITED') return 'warning'
   return 'danger'
-}
-
-/** 格式化 ISO 时间为本地可读时间。 */
-function formatDateTime(value?: string | null): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
 /** 拉取管理员可见的全部用户与邀请记录。 */

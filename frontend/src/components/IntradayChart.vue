@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { IntradayRead } from '../api/types'
-import { formatDecimal, formatMoney, formatSignedPercent, trendClass } from '../utils/format'
+import { formatBeijingAxisTime, formatDecimal, formatMoney, formatSignedPercent, trendClass } from '../utils/format'
 
 type Trend = 'up' | 'down' | 'neutral'
 
@@ -34,22 +34,14 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const svgRef = ref<SVGSVGElement | null>(null)
 const hoverSvgX = ref<number | null>(null)
 
-/** 按曲线类型格式化横轴标签：分时显示时分，基金近期净值显示月日。 */
+/** 按曲线类型格式化横轴标签（北京时间）：分时显示时分，基金近期净值显示月日。 */
 function formatAxisTime(stamp: number): string {
-  const date = new Date(stamp)
-  if (isNavSeries.value) {
-    return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
-  }
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return formatBeijingAxisTime(stamp, isNavSeries.value ? 'date-short' : 'time')
 }
 
-/** 按曲线类型格式化悬浮提示时间：分时显示时分，基金净值显示年月日。 */
+/** 按曲线类型格式化悬浮提示时间（北京时间）：分时显示时分，基金净值显示年月日。 */
 function formatTooltipTime(stamp: number): string {
-  const date = new Date(stamp)
-  if (isNavSeries.value) {
-    return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-  }
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return formatBeijingAxisTime(stamp, isNavSeries.value ? 'date-full' : 'time')
 }
 
 /** 计算相对基准价的涨跌幅展示文本与涨跌样式。 */

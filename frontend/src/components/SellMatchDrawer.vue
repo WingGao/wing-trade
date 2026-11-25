@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Currency, Lot, SellPreview } from '../api/types'
 import { formatDateTime, formatMoney, formatQuantity, priceDigits, quantityUnit, trendClass } from '../utils/format'
+import { nowBeijingPickerValue, toAwareBeijingIso } from '../utils/time'
 import { useViewport } from '../utils/viewport'
 
 interface PreviewInput {
@@ -23,17 +24,20 @@ const visible = defineModel<boolean>({ default: false })
 const { isMobile } = useViewport()
 const isUS = computed(() => props.currency === 'USD')
 const allowDecimalQty = computed(() => Boolean(props.isFund) || isUS.value)
-const form = reactive({ qty: '', price: '', executedAt: new Date().toISOString().slice(0, 16), commission: '', otherFee: '' })
+const form = reactive({ qty: '', price: '', executedAt: nowBeijingPickerValue(), commission: '', otherFee: '' })
 const preview = ref<SellPreview | null>(null)
 const previewInput = ref<PreviewInput | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
 let previewGeneration = 0
 
-/** 将表单时间安全转换为接口使用的 ISO 时间。 */
+/** 将表单时间安全转换为带 +08:00 时区的北京时间 ISO 字符串。 */
 function executedAtIso(): string {
-  const parsed = new Date(form.executedAt)
-  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString()
+  try {
+    return toAwareBeijingIso(form.executedAt)
+  } catch {
+    return ''
+  }
 }
 
 /** 为当前账户、证券和卖出输入生成不可变预览快照。 */
@@ -69,7 +73,10 @@ function shortLotId(lotId: string): string {
 }
 
 watch(() => [props.accountId, props.securityId, form.qty, form.price, form.executedAt, form.commission, form.otherFee], invalidatePreview)
-watch(visible, (open) => { if (!open) invalidatePreview() })
+watch(visible, (open) => {
+  if (open) form.executedAt = nowBeijingPickerValue()
+  else invalidatePreview()
+})
 
 /** 请求最近买入优先且跨批次等量分配的预览，并丢弃已过期响应。 */
 async function previewSell() {

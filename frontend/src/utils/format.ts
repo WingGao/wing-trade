@@ -1,4 +1,16 @@
 import type { Currency, MarketSessionPhase, ValuationStatus } from '../api/types'
+export {
+  BEIJING_OFFSET,
+  BEIJING_TIMEZONE,
+  formatBeijingAxisTime,
+  formatDateTime,
+  hasTimezoneOffset,
+  nowBeijingPickerValue,
+  parseServerDate,
+  requireTimezoneIso,
+  toAwareBeijingIso,
+  toBeijingIsoString,
+} from './time'
 
 const numberFormatters = new Map<string, Intl.NumberFormat>()
 
@@ -148,13 +160,6 @@ export function trendClass(value: string | null | undefined): 'up' | 'down' | 'n
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed === 0) return 'neutral'
   return parsed > 0 ? 'up' : 'down'
-}
-
-/** 将 ISO 时间转换为本地可读时间，无效或缺失时显示破折号。 */
-export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false })
 }
 
 /** 返回估值状态的简短中文标签。 */

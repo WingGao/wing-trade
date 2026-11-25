@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Trade, TradeUpdate, TradeUpdateRead } from '../api/types'
 import { useLedgerStore } from '../stores/ledger'
+import { requireTimezoneIso, toBeijingIsoString } from '../utils/time'
 import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{ trade: Trade | null; securityLabel: string }>()
@@ -16,9 +17,9 @@ const error = ref('')
 const form = reactive({ executedAt: '', qty: '', price: '', commission: '', stampDuty: '', transferFee: '', otherFee: '', memo: '', reason: '' })
 let alive = true
 
-/** 既有 SQLite 响应的无时区时间按 UTC 标注，只追加时区，不重建或截断微秒。 */
+/** 将服务端交易时间统一转换为带 +08:00 的北京时间并保留微秒精度。 */
 function formTimestamp(value: string): string {
-  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`
+  return toBeijingIsoString(value)
 }
 
 /** 完整预填服务端原始字符串，不使用整数数量或三位价格展示格式。 */
@@ -43,13 +44,19 @@ async function submit() {
   if (!validDecimal(form.qty, true) || !validDecimal(form.price, true)) { error.value = '成交数量和价格必须为正数'; return }
   const feeKeys = ['commission', 'stampDuty', 'transferFee', 'otherFee'] as const
   if (feeKeys.some((key) => !validDecimal(form[key], false))) { error.value = '各项费用必须为非负数'; return }
-  if (!form.executedAt.trim() || Number.isNaN(Date.parse(form.executedAt))) { error.value = '请输入带时区的有效成交时间'; return }
-  if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(form.executedAt.trim())) { error.value = '成交时间须包含时区，例如 +08:00 或 Z'; return }
+  let normalizedExecutedAt = ''
+  try {
+    normalizedExecutedAt = requireTimezoneIso(form.executedAt)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '请输入带时区的有效成交时间'
+    return
+  }
   const payload: TradeUpdate = { revision: trade.revision }
   const exactKeys = ['executedAt', 'qty', 'price', ...feeKeys] as const
   for (const key of exactKeys) {
     const original = key === 'executedAt' ? formTimestamp(trade.executedAt) : trade[key]
-    if (form[key].trim() !== original) payload[key] = form[key].trim()
+    const current = key === 'executedAt' ? normalizedExecutedAt : form[key].trim()
+    if (current !== original) payload[key] = current
   }
   if (form.memo !== (trade.memo ?? '')) payload.memo = form.memo || null
   if (form.reason.trim()) payload.reason = form.reason.trim()
