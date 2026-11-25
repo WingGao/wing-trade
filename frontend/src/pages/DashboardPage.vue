@@ -14,6 +14,7 @@ import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
 import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
+import NotificationSettingDialog from '../components/NotificationSettingDialog.vue'
 import { formatDateTime, formatMoney, formatPercent, isFundSecurity, marketSessionLabel, trendClass, valuationStatusLabel } from '../utils/format'
 import { refreshPosition } from '../utils/recalculate'
 import { projectDashboardWithQuotes } from '../utils/valuation'
@@ -48,6 +49,7 @@ const searching = ref(false)
 const searchError = ref('')
 const searched = ref(false)
 const globalTargetVisible = ref(false)
+const notificationSettingVisible = ref(false)
 const selectedSecurity = ref<Security | null>(null)
 const selectedLots = ref<Lot[]>([])
 const accounts = computed(() => accountsStore.accounts)
@@ -449,6 +451,7 @@ onBeforeUnmount(() => {
         <el-tag v-if="marketSessionText" :type="dashboard?.marketSessionOpen ? 'success' : 'info'" effect="plain">{{ marketSessionText }}</el-tag>
         <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
         <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
+        <el-button @click="notificationSettingVisible = true">推送设置</el-button>
         <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
         <el-button type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新行情</el-button>
       </div>
@@ -547,6 +550,7 @@ onBeforeUnmount(() => {
         <div class="m-dash-actions">
           <el-switch v-model="preferences.includeClosed" size="small" active-text="已结清" />
           <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
+          <el-button size="small" @click="notificationSettingVisible = true">推送</el-button>
           <el-button size="small" type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新</el-button>
         </div>
       </div>
@@ -650,6 +654,7 @@ onBeforeUnmount(() => {
   <BuyTradeDialog v-if="selectedSecurity" v-model="buyVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :is-fund="isFundSecurity(selectedSecurity)" @saved="reloadQuickTrade" />
   <SellMatchDrawer v-if="selectedSecurity" v-model="sellVisible" :security-id="selectedSecurity.id" :account-id="selectedAccountId" :currency="selectedSecurity.currency" :is-fund="isFundSecurity(selectedSecurity)" :lots="selectedLots" @saved="reloadQuickTrade" />
   <ProfitSettingDialog v-model="globalTargetVisible" />
+  <NotificationSettingDialog v-model="notificationSettingVisible" />
 </template>
 
 <style scoped>
@@ -697,7 +702,7 @@ onBeforeUnmount(() => {
 }
 .m-positions-wrap { margin-bottom: 8px; }
 .m-dash-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 10px; border-bottom: 1px solid #edf0f5; flex-wrap: wrap; }
-.m-dash-actions { display: flex; align-items: center; gap: 6px; }
+.m-dash-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .m-summary-top { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #edf0f5; }
 .m-summary-cell { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .m-summary-cell:first-child { border-right: 1px solid #edf0f5; }

@@ -1,4 +1,4 @@
-import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead } from './types'
+import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead, WeComNotificationSetting, WeComNotificationTestResult, WeComNotificationUpdate } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
@@ -85,4 +85,10 @@ export const api = {
   createTarget: (lotId: string, payload: Record<string, unknown>) => request<ProfitTarget>(`/lots/${lotId}/targets`, { method: 'POST', body: JSON.stringify(payload) }),
   updateTarget: (id: string, payload: Record<string, unknown>) => request<ProfitTarget>(`/targets/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTarget: (id: string) => request<void>(`/targets/${id}`, { method: 'DELETE' }),
+  /** 读取当前用户的企业微信止盈推送脱敏配置。 */
+  wecomNotification: () => request<WeComNotificationSetting>('/notifications/wecom'),
+  /** 保存、更新或清空当前用户的企业微信止盈推送配置。 */
+  saveWecomNotification: (payload: WeComNotificationUpdate) => request<WeComNotificationSetting>('/notifications/wecom', { method: 'PUT', body: JSON.stringify(payload) }),
+  /** 发送一条企业微信测试消息以验证 Webhook 连通性。 */
+  testWecomNotification: (webhookUrl?: string) => request<WeComNotificationTestResult>('/notifications/wecom/test', { method: 'POST', body: JSON.stringify(webhookUrl ? { webhookUrl } : {}) }),
 }

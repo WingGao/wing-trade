@@ -336,6 +336,24 @@ export interface SellPreview {
   matches: SellPreviewMatch[]
 }
 
+export interface WeComNotificationSetting {
+  channelType: string
+  enabled: boolean
+  configured: boolean
+  maskedWebhookUrl: string | null
+  updatedAt: string | null
+}
+
+export interface WeComNotificationUpdate {
+  enabled: boolean
+  webhookUrl?: string | null
+}
+
+export interface WeComNotificationTestResult {
+  ok: boolean
+  message: string
+}
+
 export interface ApiError {
   error?: { code?: string; message?: string; details?: Record<string, unknown> }
 }
