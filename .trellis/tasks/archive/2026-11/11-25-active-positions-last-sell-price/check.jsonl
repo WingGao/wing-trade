@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码质量与规范检查"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端代码质量与规范检查"}
+{"file": ".trellis/spec/frontend/active-position-dashboard.md", "reason": "活动仓位展示与排序验收契约"}
+{"file": ".trellis/spec/frontend/mobile-high-density.md", "reason": "移动端零横向溢出与布局验收契约"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "个股详情页交互与汇总验收契约"}

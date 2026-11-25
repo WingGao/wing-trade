@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "后端持仓批次与估值契约"}
+{"file": ".trellis/spec/frontend/active-position-dashboard.md", "reason": "活动仓位展示、排序与报价提示契约"}
+{"file": ".trellis/spec/frontend/mobile-high-density.md", "reason": "移动端高信息密度与零横向溢出契约"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "个股详情页轮询、代次防护与 SSE 派生契约"}
