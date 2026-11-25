@@ -352,6 +352,7 @@ def _create_default_longbridge_context(credentials: LongbridgeCredentials) -> tu
         "app_secret": credentials.app_secret,
         "access_token": credentials.access_token,
         "enable_overnight": credentials.enable_overnight,
+        "enable_print_quote_packages": False,
     }
     if credentials.http_url:
         kwargs["http_url"] = credentials.http_url
