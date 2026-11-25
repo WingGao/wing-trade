@@ -272,3 +272,18 @@ return latest_price * remaining_qty - remaining_cost
 
 - 单元测试：`backend/tests/unit/test_config.py`（长桥配置与校验）、`backend/tests/unit/test_longbridge_adapter.py`（代码映射、基线/增量合并、美股盘后基准、500 上限与线程桥接）、`backend/tests/unit/test_quote_hub.py`（内存发布、基金代理联动估算、300ms 合并、落盘纯净与临时订阅引用计数）。
 - 集成测试：`backend/tests/integration/test_quote_stream_api.py`（未登录 401、首帧 `snapshot`、增量 `quote`、多用户隔离及内存优先 Dashboard 估值）。
+
+---
+
+## Scenario: 个股近 20 个已收盘交易日平均振幅（`security_daily_metrics`）
+
+### 1. Scope / Trigger
+
+- 触发条件：修改日 K 线振幅计算（`backend/app/market_data/amplitude.py`）、`security_daily_metrics` 缓存表或 `DashboardPositionRead` 的 `avgAmplitude20d` / `avgAmplitudeDays` / `avgAmplitudeAsOf` 字段。
+- 振幅属于只读派生指标，任何上游拉取失败或超时均不得阻断或报错 `GET /api/v1/dashboard`。
+
+### 2. Contracts
+
+- **口径与窗口**：单日振幅为 `(最高价 - 最低价) / 昨收 × 100%`（优先采信东财日 K `f58`，缺失时用前一日收盘价精确 `Decimal` 计算），严格排除当日盘中未收盘 K 线，取最近最多 20 个已收盘交易日的算术均值（不足 20 日按实际已收盘天数求平均）。
+- **市场范围**：支持 A 股（`SH`/`SZ`/`BJ`，东财日 K）与美股（`US`，东财日 K 主源 + 腾讯美股日 K 备源）；场外基金（`OF`）直接跳过并返回 `null`。
+- **缓存与防打爆**：按各市场理论最新已收盘交易日判断 `security_daily_metrics` 新鲜度，同一已收盘交易日内零上游请求；进程内维护 30 分钟失败/节假日冷却与并发上限（4）、批量超时（4s）；`quote_provider == "mock"` 与 `mode == "cache"` 下严禁访问公网。

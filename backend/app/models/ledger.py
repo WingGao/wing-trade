@@ -276,6 +276,21 @@ class QuoteCache(Base):
     is_stale: Mapped[bool] = mapped_column(default=False, nullable=False)
 
 
+class SecurityDailyMetric(Base):
+    """证券日频派生指标缓存表，保存最近 20 个已收盘交易日平均振幅与统计元数据。"""
+
+    __tablename__ = "security_daily_metrics"
+
+    security_id: Mapped[str] = mapped_column(
+        ForeignKey("securities.id", ondelete="CASCADE"), primary_key=True
+    )
+    avg_amplitude_20d: Mapped[Decimal | None] = mapped_column(ExactDecimal(6))
+    amplitude_sample_days: Mapped[int | None] = mapped_column(Integer)
+    amplitude_as_of_date: Mapped[str | None] = mapped_column(String(10))
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str | None] = mapped_column(String(64))
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
     __table_args__ = (Index("ix_audit_events_entity", "entity_type", "entity_id", "created_at"),)
@@ -303,5 +318,6 @@ __all__ = [
     "TradeMatch",
     "ProfitTarget",
     "QuoteCache",
+    "SecurityDailyMetric",
     "AuditEvent",
 ]

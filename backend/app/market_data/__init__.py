@@ -1,5 +1,10 @@
 """Market quote providers, cache services, and collection orchestration."""
 
+from .amplitude import (
+    DailyAmplitudeProvider,
+    DailyAmplitudeService,
+    DailyAmplitudeSnapshot,
+)
 from .calendar import (
     AShareTradingCalendar,
     MarketSessionPhase,
@@ -38,6 +43,9 @@ from .service import QuoteService
 
 __all__ = [
     "AShareTradingCalendar",
+    "DailyAmplitudeProvider",
+    "DailyAmplitudeService",
+    "DailyAmplitudeSnapshot",
     "MarketSessionPhase",
     "OpenFundCalendar",
     "USTradingCalendar",

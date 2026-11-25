@@ -51,7 +51,13 @@ from app.domain.markets import currency_for_market
 from app.domain.models import MatchRequest
 from app.domain.precision import round_amount, round_price, round_qty
 from app.domain.time import format_beijing_iso
-from app.market_data import MarketDataHub, QuoteCollector, create_quote_provider
+from app.market_data import (
+    DailyAmplitudeProvider,
+    DailyAmplitudeService,
+    MarketDataHub,
+    QuoteCollector,
+    create_quote_provider,
+)
 from app.models.auth import User
 from app.models.ledger import (
     Account,
@@ -79,6 +85,10 @@ from app.services.recalculate import RecalculationService
 from app.services.target import TargetService
 
 quote_collector = QuoteCollector(create_quote_provider())
+daily_amplitude_service = DailyAmplitudeService(
+    provider=DailyAmplitudeProvider(timeout_seconds=settings.quote_timeout_seconds),
+    network_enabled=settings.quote_provider != "mock",
+)
 quote_hub = MarketDataHub(
     quote_service=quote_collector.service,
     provider=quote_collector.provider,
@@ -1478,7 +1488,12 @@ async def dashboard(
 ) -> dict[str, Any]:
     """返回账务、持仓、行情和汇总来自同一估值切片的首页数据。"""
     resolved_account_id = resolve_account(session, account_id, user_id=current_user.id)
-    service = DashboardService(quote_collector)
+    amplitude_service = (
+        daily_amplitude_service
+        if quote_collector.provider.name != "mock"
+        else DailyAmplitudeService(network_enabled=False)
+    )
+    service = DashboardService(quote_collector, amplitude_service=amplitude_service)
     return await service.build(
         session,
         account_id=resolved_account_id,

@@ -66,6 +66,9 @@ class DashboardPositionRead(APIModel):
     last_sell_price: Decimal | None = None
     last_sell_executed_at: datetime | None = None
     vs_last_sell_pct: Decimal | None = None
+    avg_amplitude_20d: Decimal | None = None
+    avg_amplitude_days: int | None = None
+    avg_amplitude_as_of: str | None = None
     quote: QuoteRead | None = None
     lowest_price_group: LowestPriceGroupRead | None = None
 

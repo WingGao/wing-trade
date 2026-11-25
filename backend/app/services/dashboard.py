@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.domain.enums import TradeSide, TradeStatus
 from app.domain.precision import round_amount, round_qty
 from app.domain.time import to_beijing
+from app.market_data.amplitude import DailyAmplitudeService, DailyAmplitudeSnapshot
 from app.market_data.collector import QuoteCollector
 from app.market_data.provider import QuoteSnapshot
 from app.market_data.service import QuoteService
@@ -32,11 +33,19 @@ DashboardMode = Literal["cache", "auto", "manual"]
 class DashboardService:
     """构建账户持仓、行情覆盖与汇总来自同一时间切片的首页读取模型。"""
 
-    def __init__(self, collector: QuoteCollector) -> None:
-        """保存共享行情采集器及其日历和缓存服务。"""
+    def __init__(
+        self,
+        collector: QuoteCollector,
+        *,
+        amplitude_service: DailyAmplitudeService | None = None,
+    ) -> None:
+        """保存共享行情采集器、日频振幅服务及其日历和缓存服务。"""
         self.collector = collector
         self.quote_service: QuoteService = collector.service
         self.calendar = collector.calendar
+        self.amplitude_service = amplitude_service or DailyAmplitudeService(
+            network_enabled=collector.provider.name != "mock",
+        )
 
     async def build(
         self,
@@ -66,10 +75,20 @@ class DashboardService:
             now=current,
         )
         snapshots_by_symbol = {snapshot.symbol: snapshot for snapshot in snapshots}
+        position_security_ids = {security_id for security_id, _ in groups}
+        position_securities = [
+            security for security in securities if security.id in position_security_ids
+        ]
+        amplitudes_by_security = await self.amplitude_service.get_or_refresh(
+            session,
+            position_securities,
+            allow_refresh=mode != "cache",
+            now=current,
+        )
         latest_sells = self._latest_active_sells(
             session,
             account_id=account_id,
-            security_ids={security_id for security_id, _ in groups},
+            security_ids=position_security_ids,
         )
         positions = [
             self._position_data(
@@ -80,6 +99,7 @@ class DashboardService:
                 lots=group,
                 snapshots_by_symbol=snapshots_by_symbol,
                 last_sell_trade=latest_sells.get((security_id, strategy_id)),
+                amplitude_snapshot=amplitudes_by_security.get(security_id),
             )
             for (security_id, strategy_id), group in sorted(
                 groups.items(), key=lambda item: self._group_sort_key(session, item[0])
@@ -286,6 +306,7 @@ class DashboardService:
         lots: Sequence[Lot],
         snapshots_by_symbol: dict[str, QuoteSnapshot],
         last_sell_trade: Trade | None = None,
+        amplitude_snapshot: DailyAmplitudeSnapshot | None = None,
     ) -> dict[str, Any]:
         """构建单个证券策略持仓行及其固定行情估值。"""
         security = session.get(Security, security_id)
@@ -366,6 +387,15 @@ class DashboardService:
             "lastSellPrice": last_sell_price,
             "lastSellExecutedAt": last_sell_executed_at,
             "vsLastSellPct": vs_last_sell_pct,
+            "avgAmplitude20d": (
+                amplitude_snapshot.avg_amplitude_20d if amplitude_snapshot is not None else None
+            ),
+            "avgAmplitudeDays": (
+                amplitude_snapshot.sample_days if amplitude_snapshot is not None else None
+            ),
+            "avgAmplitudeAsOf": (
+                amplitude_snapshot.as_of_date if amplitude_snapshot is not None else None
+            ),
             "quote": self._quote_data(security, snapshot)
             if security is not None and snapshot
             else None,
