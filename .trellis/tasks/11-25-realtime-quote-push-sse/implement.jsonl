@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/market-data-guidelines.md", "reason": "行情源、缓存新鲜度、多市场日历、场外基金代理估算与容错契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端 Decimal 精度、YAML 配置优先级与测试验证规范"}
+{"file": ".trellis/spec/backend/portfolio-batch-contracts.md", "reason": "持仓批次、估值投影与账务只读契约"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Pinia 状态边界与 Dashboard 一致估值契约"}
+{"file": ".trellis/spec/frontend/active-position-dashboard.md", "reason": "首页活动仓位展示、QuoteBadge 与涨幅排序契约"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "详情页图表、批次汇总与代次防护契约"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层事件流与 DTO 边界一致性指南"}
+{"file": ".trellis/tasks/11-25-realtime-quote-push-sse/research/longbridge-sdk-notes.md", "reason": "长桥 Python SDK 认证、代码映射、PushQuote 基线与线程桥接调研"}

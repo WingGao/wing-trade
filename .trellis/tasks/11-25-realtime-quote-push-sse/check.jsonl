@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/market-data-guidelines.md", "reason": "核验长桥接入、多市场回退、内存缓存与场外基金估算契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核验后端 Decimal 精度、配置校验、注释及测试规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "核验前端类型安全、无二进制浮点账务漂移与代码质量"}
+{"file": ".trellis/spec/frontend/active-position-dashboard.md", "reason": "核验首页实时派生估值、排序与空缺行情规则"}
+{"file": ".trellis/spec/frontend/portfolio-detail-guidelines.md", "reason": "核验详情页分时实时追加、批次汇总与切页代次防护"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核验前后端 SSE 事件协议与反代配置跨层一致性"}
+{"file": ".trellis/tasks/11-25-realtime-quote-push-sse/research/longbridge-sdk-notes.md", "reason": "对照长桥 SDK 限制核验订阅上限、prev_close 基线与线程安全"}

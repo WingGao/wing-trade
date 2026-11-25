@@ -150,3 +150,20 @@ const generation = ++previewGeneration
 const result = await api.previewSell(payload)
 if (generation === previewGeneration) preview.value = result
 ```
+
+## Scenario: 全局 SSE 实时行情推送与精确十进制派生估值
+
+### 1. Scope / Trigger
+
+- 触发条件：修改 `useQuotesStore`（`frontend/src/stores/quotes.ts`）、`frontend/src/utils/valuation.ts`、或 `App.vue` / `DashboardPage.vue` 中的 SSE 生命周期与实时投影逻辑。
+
+### 2. Signatures
+
+- `useQuotesStore`：`connect()`、`disconnect()`、`reset()`、`watchSymbol(symbol) => () => void`、`connectionState`（`idle | connecting | live | reconnecting | offline`）、`isLive`、`quotesMap`。
+- `projectDashboardWithQuotes(base: DashboardRead, quotesBySymbol: ReadonlyMap<string, Quote>): DashboardRead`（基于 `BigInt` 定点十进制与 `ROUND_HALF_UP`，零二进制浮点漂移）。
+
+### 3. Contracts
+
+- **单一长连接保活**：`App.vue` 在用户登录后调用 `quotesStore.connect()` 维护单一 `EventSource('/api/v1/quotes/stream')`，登出或 401 时立即 `reset()` 断开并清空内存报价。
+- **账务事实归服务端，盘中浮盈前端精确派生**：REST `/dashboard` 仍为持股数、剩余成本、平均成本、已实现收益和 `needsRefresh` 的唯一事实源；`DashboardPage.vue` 通过只读 `computed` 投影最新 SSE 报价并严格复刻 `empty/unavailable/partial/stale/fresh` 覆盖状态，`partial/unavailable` 时总市值与总浮盈必为 `null`。
+- **轮询收敛与平滑降级**：`quotesStore.isLive === true` 时停止 10 秒定时轮询；SSE 连续失败达到阈值自动进入 `offline` 并恢复按 `pollAfterSeconds` 降级轮询，不抛未捕获异常。

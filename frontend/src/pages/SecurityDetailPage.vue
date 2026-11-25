@@ -16,8 +16,10 @@ import QuoteBadge from '../components/QuoteBadge.vue'
 import { useAccountsStore } from '../stores/accounts'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLedgerStore } from '../stores/ledger'
+import { useQuotesStore } from '../stores/quotes'
 import { formatDateTime, formatMoney, formatQuantity, formatSignedPercent, isFundSecurity, priceDigits, trendClass } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
+import { canonicalSymbolKey, mergeQuoteIntoIntraday, pickNewerQuote, projectDashboardWithQuotes, projectLotsWithQuote } from '../utils/valuation'
 import { useViewport } from '../utils/viewport'
 
 const route = useRoute()
@@ -25,6 +27,7 @@ const router = useRouter()
 const accountsStore = useAccountsStore()
 const preferences = usePreferencesStore()
 const ledger = useLedgerStore()
+const quotesStore = useQuotesStore()
 const { isMobile } = useViewport()
 const security = ref<Security | null>(null)
 const accounts = ref<Account[]>([])
@@ -69,25 +72,44 @@ const matchingAccounts = computed(() => accounts.value.filter((account) => accou
 const requestedStrategyId = computed(() => typeof route.query.strategyId === 'string' ? route.query.strategyId : undefined)
 const refreshScope = computed<PositionRefreshScope | null>(() => security.value && accountId.value ? { accountId: accountId.value, securityId: security.value.id, strategyId: resolvedStrategyId.value ?? requestedStrategyId.value, market: security.value.market, symbol: security.value.symbol, name: security.value.name } : null)
 const rebuilding = computed(() => refreshScope.value ? isPositionRefreshing(refreshScope.value) : false)
+const canonicalKey = computed(() =>
+  canonicalSymbolKey(
+    security.value?.market ?? String(route.params.market ?? ''),
+    security.value?.symbol ?? String(route.params.symbol ?? ''),
+  ),
+)
+const liveQuote = computed(() => quotesStore.bySymbol(canonicalKey.value))
+const displayIntraday = computed<IntradayRead | null>(() =>
+  intraday.value ? mergeQuoteIntoIntraday(intraday.value, liveQuote.value ?? null) : null,
+)
 const currentQuote = computed(() => {
-  const quote = lotQuote.value ?? intraday.value?.quote
-  return quote && (marketError.value || intraday.value?.isStale) ? { ...quote, isStale: true } : quote
+  const baseQuote = lotQuote.value ?? intraday.value?.quote ?? null
+  const merged = pickNewerQuote(baseQuote, liveQuote.value)
+  if (!merged) return null
+  return marketError.value || displayIntraday.value?.isStale ? { ...merged, isStale: true } : merged
 })
+const projectedLotsState = computed(() =>
+  projectLotsWithQuote(lots.value, holdingSummary.value, currentQuote.value),
+)
+const displayLots = computed(() => projectedLotsState.value.lots)
+const displayHoldingSummary = computed(() => projectedLotsState.value.summary)
 /** 判断有价汇总是否只能作为过期参考展示。 */
-const holdingSummaryStale = computed(() => holdingSummary.value?.unrealizedPnl !== null && holdingSummary.value?.unrealizedPnl !== undefined && Boolean(currentQuote.value?.isStale))
-const hasOpenLots = computed(() => lots.value.some((lot) => lot.status === 'OPEN'))
+const holdingSummaryStale = computed(() => displayHoldingSummary.value?.unrealizedPnl !== null && displayHoldingSummary.value?.unrealizedPnl !== undefined && Boolean(currentQuote.value?.isStale))
+const hasOpenLots = computed(() => displayLots.value.some((lot) => lot.status === 'OPEN'))
 /** 判断服务端汇总是否包含仍有剩余数量的未结清批次。 */
-const hasRemainingHolding = computed(() => Boolean(holdingSummary.value && /[1-9]/.test(holdingSummary.value.remainingQty)))
+const hasRemainingHolding = computed(() => Boolean(displayHoldingSummary.value && /[1-9]/.test(displayHoldingSummary.value.remainingQty)))
 /** 按当前涨幅降序排列当前账户的活动仓位，无有效行情的持仓排在末尾，供详情页快速切换。 */
 const activePositions = computed<DashboardPosition[]>(() => {
   const snapshot = ledger.dashboard
+    ? projectDashboardWithQuotes(ledger.dashboard, quotesStore.quotesMap)
+    : null
   if (!snapshot) return []
   if (accountId.value) {
     if (snapshot.accountId !== accountId.value) return []
   } else if (snapshot.currency && snapshot.currency !== currency.value) {
     return []
   }
-  return [...ledger.positions]
+  return [...snapshot.positions]
     .filter((position) => Boolean(position.market && position.symbol))
     .sort((left, right) => {
       const leftVal = Number(left.quote?.changePct)
@@ -147,6 +169,15 @@ let lotGeneration = 0
 let dataGeneration = 0
 let pollTimer: number | null = null
 let marketFlight: { generation: number; promise: Promise<void> } | null = null
+let stopWatchSymbol: (() => void) | null = null
+
+/** 释放当前详情页在全局行情 Store 中登记的临时订阅。 */
+function releaseWatchSymbol(): void {
+  if (stopWatchSymbol) {
+    stopWatchSymbol()
+    stopWatchSymbol = null
+  }
+}
 
 /** 清理轮询，防止离页、隐藏或重新加载后遗留计时器。 */
 function clearTimer() {
@@ -192,10 +223,10 @@ async function loadLots(afterWrite = false): Promise<boolean> {
   return true
 }
 
-/** 每次行情请求完成三秒后再刷新；未绑定跟踪标的的场外基金按日公布净值，不开启 3 秒轮询。 */
+/** 每次行情请求完成三秒后再刷新；SSE 实时推送活跃或未绑定跟踪标的的场外基金均不开启 3 秒轮询。 */
 function schedulePoll() {
   clearTimer()
-  if (!alive || document.hidden || !security.value || mutationActive.value) return
+  if (!alive || document.hidden || !security.value || mutationActive.value || quotesStore.isLive) return
   if (isFund.value && (!hasProxyBinding.value || fundSeriesMode.value === 'nav')) return
   pollTimer = window.setTimeout(() => { pollTimer = null; void refreshMarket() }, 3000)
 }
@@ -261,6 +292,8 @@ async function loadPage() {
     security.value = found.find((item) => item.market.toUpperCase() === market && item.symbol.toUpperCase() === symbol) ?? null
     accounts.value = availableAccounts
     if (!security.value) throw new Error('找不到该证券，请先在总览中查找并添加')
+    releaseWatchSymbol()
+    stopWatchSymbol = quotesStore.watchSymbol(`${security.value.market}:${security.value.symbol}`)
     const requestedAccount = typeof route.query.accountId === 'string' ? route.query.accountId : undefined
     if (requestedAccount && !matchingAccounts.value.some((account) => account.id === requestedAccount)) throw new Error('指定账户不存在或与当前证券币种不匹配')
     if (requestedAccount) accountId.value = requestedAccount
@@ -332,6 +365,11 @@ function switchFundSeries(mode: 'auto' | 'nav'): void {
 /** 标签页恢复可见立即刷新，隐藏时不再安排请求。 */
 function handleVisibility() { clearTimer(); if (!document.hidden) void refreshMarket() }
 
+watch(() => quotesStore.connectionState, (state) => {
+  if (!alive) return
+  if (state === 'live') clearTimer()
+  else if (state === 'offline') schedulePoll()
+})
 watch(() => [route.params.market, route.params.symbol, route.query.accountId, route.query.strategyId], () => { if (alive) void loadPage() })
 watch(() => [accountId.value, preferences.includeClosed] as const, ([account], previous) => {
   // 查询范围或开关改变后立即清空旧明细，失败与乱序响应也不能恢复其他范围的数据。
@@ -353,7 +391,7 @@ watch(() => [accountId.value, preferences.includeClosed] as const, ([account], p
   }
 })
 onMounted(() => { alive = true; document.addEventListener('visibilitychange', handleVisibility); void loadPage() })
-onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clearTimer(); document.removeEventListener('visibilitychange', handleVisibility) })
+onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clearTimer(); releaseWatchSymbol(); document.removeEventListener('visibilitychange', handleVisibility) })
 </script>
 
 <template>
@@ -406,19 +444,19 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
         <div class="chart-title-group">
           <span>
             {{
-              intraday?.seriesKind === 'estimated_intraday'
+              displayIntraday?.seriesKind === 'estimated_intraday'
                 ? '盘中估算净值走势'
                 : isFund
                   ? '近期单位净值走势'
                   : '当前日股价图'
             }}
             <span class="muted">
-              {{ intraday?.tradingDate ?? '' }}{{
-                intraday?.seriesKind === 'estimated_intraday'
-                  ? ' · 盘中实时估算 · 每 3 秒刷新'
+              {{ displayIntraday?.tradingDate ?? '' }}{{
+                displayIntraday?.seriesKind === 'estimated_intraday'
+                  ? (quotesStore.isLive ? ' · 盘中实时估算 · 实时推送' : ' · 盘中实时估算 · 每 3 秒刷新')
                   : isFund
                     ? ' · 已公布净值'
-                    : ' · 每 3 秒刷新'
+                    : (quotesStore.isLive ? ' · 实时推送' : ' · 每 3 秒刷新')
               }}
             </span>
           </span>
@@ -431,8 +469,8 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
       </div>
     </template>
     <el-alert v-if="marketError" :title="`行情刷新失败：${marketError}；保留最后有效数据作为过期参考。`" type="warning" :closable="false" class="status-alert" />
-    <div class="muted">来源 {{ intraday?.provider ?? '—' }} · 获取 {{ formatDateTime(intraday?.fetchedAt) }}<span v-if="intraday?.isStale || marketError"> · 行情已过期</span></div>
-    <IntradayChart :data="intraday" />
+    <div class="muted">来源 {{ displayIntraday?.provider ?? '—' }} · 获取 {{ formatDateTime(displayIntraday?.fetchedAt) }}<span v-if="displayIntraday?.isStale || marketError"> · 行情已过期</span></div>
+    <IntradayChart :data="displayIntraday" />
   </el-card>
   <el-card class="panel">
     <template #header><div class="panel-title lot-heading"><span>持仓批次 <span class="muted">已结清 {{ closedLotCount }} 批</span></span><div class="toolbar"><el-switch v-model="preferences.includeClosed" active-text="显示已结清" /><el-button :disabled="!security || !accountId" :loading="rebuilding" @click="recalculate">重新计算</el-button></div></div></template>
@@ -443,25 +481,25 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
     <dl class="holding-summary" aria-label="持仓汇总">
       <div class="summary-item">
         <dt>{{ isFund ? '总份额' : '总持股数' }}</dt>
-        <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty, isFund) }}</dd>
+        <dd class="summary-value">{{ formatQuantity(displayHoldingSummary?.remainingQty, isFund) }}</dd>
       </div>
       <div class="summary-item">
         <dt>持仓成本</dt>
-        <dd class="summary-value">{{ formatMoney(holdingSummary?.remainingCost, currency) }}</dd>
+        <dd class="summary-value">{{ formatMoney(displayHoldingSummary?.remainingCost, currency) }}</dd>
       </div>
       <div class="summary-item">
         <dt>已实现收益</dt>
-        <dd class="summary-value" :class="trendClass(holdingSummary?.realizedPnl)">{{ formatMoney(holdingSummary?.realizedPnl, currency) }}</dd>
+        <dd class="summary-value" :class="trendClass(displayHoldingSummary?.realizedPnl)">{{ formatMoney(displayHoldingSummary?.realizedPnl, currency) }}</dd>
       </div>
       <div class="summary-item">
         <dt>总浮盈</dt>
-        <dd class="summary-value" :class="trendClass(holdingSummary?.unrealizedPnl)">{{ formatMoney(holdingSummary?.unrealizedPnl, currency) }}</dd>
-        <p v-if="holdingSummary && !hasRemainingHolding" class="summary-note">暂无持仓</p>
-        <p v-else-if="holdingSummary?.unrealizedPnl === null" class="summary-note">暂无有效行情</p>
+        <dd class="summary-value" :class="trendClass(displayHoldingSummary?.unrealizedPnl)">{{ formatMoney(displayHoldingSummary?.unrealizedPnl, currency) }}</dd>
+        <p v-if="displayHoldingSummary && !hasRemainingHolding" class="summary-note">暂无持仓</p>
+        <p v-else-if="displayHoldingSummary?.unrealizedPnl === null" class="summary-note">暂无有效行情</p>
         <p v-else-if="holdingSummaryStale" class="summary-note">参考浮盈 · 行情已过期</p>
       </div>
     </dl>
-    <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" /></div>
+    <div v-loading="loading || rebuilding"><LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" /></div>
     <section v-if="preferences.includeClosed" class="settled-trade-section">
       <h3 class="panel-title">已结清买卖明细</h3>
       <p class="muted">显示已结清批次的原始买入和全部有效卖出；跨批次卖出仅展示本批数量、分摊净回款和已实现盈亏。</p>
@@ -524,8 +562,8 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
 
     <section class="m-section m-chart-box">
       <button type="button" class="m-section-head m-collapse-head" :aria-expanded="mobileChartOpen" @click="toggleMobileChart">
-        <span>{{ intraday?.seriesKind === 'estimated_intraday' ? '盘中估算分时' : isFund ? '近期净值' : '日内分时' }} <span class="m-section-sub">{{ intraday?.tradingDate ?? '' }}</span></span>
-        <span class="m-section-sub">{{ intraday?.provider ?? '—' }}<span v-if="intraday?.isStale || marketError"> · 已过期</span> · {{ mobileChartOpen ? '收起 ▴' : '展开 ▾' }}</span>
+        <span>{{ displayIntraday?.seriesKind === 'estimated_intraday' ? '盘中估算分时' : isFund ? '近期净值' : '日内分时' }} <span class="m-section-sub">{{ displayIntraday?.tradingDate ?? '' }}</span></span>
+        <span class="m-section-sub">{{ displayIntraday?.provider ?? '—' }}<span v-if="displayIntraday?.isStale || marketError"> · 已过期</span> · {{ mobileChartOpen ? '收起 ▴' : '展开 ▾' }}</span>
       </button>
       <template v-if="mobileChartOpen">
         <div v-if="hasProxyBinding" class="m-series-toggle">
@@ -536,7 +574,7 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
           </el-button-group>
         </div>
         <div v-if="marketError" class="m-compact-note is-warning">行情刷新失败：{{ marketError }}；保留最后有效数据作为过期参考。</div>
-        <div class="m-chart-body"><IntradayChart :data="intraday" /></div>
+        <div class="m-chart-body"><IntradayChart :data="displayIntraday" /></div>
       </template>
     </section>
 
@@ -555,25 +593,25 @@ onBeforeUnmount(() => { alive = false; generation += 1; lotGeneration += 1; clea
       <dl class="holding-summary m-holding-summary" aria-label="持仓汇总">
         <div class="summary-item">
           <dt>{{ isFund ? '总份额' : '总持股数' }}</dt>
-          <dd class="summary-value">{{ formatQuantity(holdingSummary?.remainingQty, isFund) }}</dd>
+          <dd class="summary-value">{{ formatQuantity(displayHoldingSummary?.remainingQty, isFund) }}</dd>
         </div>
         <div class="summary-item">
           <dt>持仓成本</dt>
-          <dd class="summary-value">{{ formatMoney(holdingSummary?.remainingCost, currency) }}</dd>
+          <dd class="summary-value">{{ formatMoney(displayHoldingSummary?.remainingCost, currency) }}</dd>
         </div>
         <div class="summary-item">
           <dt>已实现收益</dt>
-          <dd class="summary-value" :class="trendClass(holdingSummary?.realizedPnl)">{{ formatMoney(holdingSummary?.realizedPnl, currency) }}</dd>
+          <dd class="summary-value" :class="trendClass(displayHoldingSummary?.realizedPnl)">{{ formatMoney(displayHoldingSummary?.realizedPnl, currency) }}</dd>
         </div>
         <div class="summary-item">
           <dt>总浮盈</dt>
-          <dd class="summary-value" :class="trendClass(holdingSummary?.unrealizedPnl)">{{ formatMoney(holdingSummary?.unrealizedPnl, currency) }}</dd>
-          <p v-if="holdingSummary && !hasRemainingHolding" class="summary-note">暂无持仓</p>
-          <p v-else-if="holdingSummary?.unrealizedPnl === null" class="summary-note">暂无有效行情</p>
+          <dd class="summary-value" :class="trendClass(displayHoldingSummary?.unrealizedPnl)">{{ formatMoney(displayHoldingSummary?.unrealizedPnl, currency) }}</dd>
+          <p v-if="displayHoldingSummary && !hasRemainingHolding" class="summary-note">暂无持仓</p>
+          <p v-else-if="displayHoldingSummary?.unrealizedPnl === null" class="summary-note">暂无有效行情</p>
           <p v-else-if="holdingSummaryStale" class="summary-note">参考浮盈 · 行情已过期</p>
         </div>
       </dl>
-      <div v-loading="loading || rebuilding"><LotTable :lots="lots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" /></div>
+      <div v-loading="loading || rebuilding"><LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" /></div>
     </section>
 
     <section v-if="preferences.includeClosed" class="m-section">

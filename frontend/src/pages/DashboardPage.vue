@@ -6,6 +6,7 @@ import type { Currency, DashboardMode, DashboardPosition, Lot, PositionRefreshSc
 import { useAccountsStore } from '../stores/accounts'
 import { useLedgerStore } from '../stores/ledger'
 import { usePreferencesStore } from '../stores/preferences'
+import { useQuotesStore } from '../stores/quotes'
 import { api } from '../api/client'
 import QuoteBadge from '../components/QuoteBadge.vue'
 import BuyTradeDialog from '../components/BuyTradeDialog.vue'
@@ -13,16 +14,25 @@ import SellMatchDrawer from '../components/SellMatchDrawer.vue'
 import ProfitSettingDialog from '../components/ProfitSettingDialog.vue'
 import { formatDateTime, formatDecimal, formatMoney, formatPercent, formatQuantity, isFundSecurity, marketSessionLabel, priceDigits, quantityUnit, trendClass, valuationStatusLabel } from '../utils/format'
 import { isPositionRefreshing, refreshPosition } from '../utils/recalculate'
+import { projectDashboardWithQuotes } from '../utils/valuation'
 import { useViewport } from '../utils/viewport'
 
 const accountsStore = useAccountsStore()
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
+const quotesStore = useQuotesStore()
 const router = useRouter()
 const { isMobile } = useViewport()
-const positions = computed(() => ledger.positions)
+const dashboard = computed(() =>
+  ledger.dashboard ? projectDashboardWithQuotes(ledger.dashboard, quotesStore.quotesMap) : null,
+)
+const positions = computed(() => dashboard.value?.positions ?? [])
 const positionSortOrder = ref<'ascending' | 'descending'>('descending')
-const dashboard = computed(() => ledger.dashboard)
+const streamStatusText = computed(() => {
+  if (quotesStore.connectionState === 'live') return '实时推送中'
+  if (quotesStore.connectionState === 'reconnecting') return '行情重连中'
+  return ''
+})
 const dashboardCurrency = computed<Currency | null>(() => dashboard.value?.currency ?? accountsStore.activeAccount?.currency ?? null)
 const marketSessionText = computed(() => {
   const phase = dashboard.value?.marketSession
@@ -193,10 +203,10 @@ function clearPollTimer() {
   pollTimer = null
 }
 
-/** 按服务器返回的间隔安排下一次自动估值，避免前端推断市场时区。 */
+/** 按服务器返回的间隔安排下一次自动估值；SSE 处于实时推送态时停止定时轮询。 */
 function schedulePoll(seconds: number | undefined) {
   clearPollTimer()
-  if (!pageAlive.value || document.hidden || mutationActive.value) return
+  if (!pageAlive.value || document.hidden || mutationActive.value || quotesStore.isLive) return
   const parsed = Number(seconds)
   const delaySeconds = Number.isFinite(parsed) ? Math.max(1, parsed) : 60
   pollTimer = window.setTimeout(() => {
@@ -389,6 +399,15 @@ watch(() => accountsStore.activeAccountId, (nextAccountId) => {
   void loadValuation('auto')
 })
 
+watch(() => quotesStore.connectionState, (state) => {
+  if (!pageAlive.value) return
+  if (state === 'live') {
+    clearPollTimer()
+  } else if (state === 'offline') {
+    schedulePoll(dashboard.value?.pollAfterSeconds)
+  }
+})
+
 watch(() => preferences.includeClosed, () => {
   queryGeneration += 1
   if (!pageAlive.value) return
@@ -420,6 +439,7 @@ onBeforeUnmount(() => {
   <section class="page-head">
     <div><h2>账户总览</h2><p class="muted">以真实交易流水为准，价格、浮盈和汇总来自同一次估值响应。</p></div>
     <div class="toolbar">
+      <el-tag v-if="streamStatusText" :type="quotesStore.isLive ? 'success' : 'warning'" effect="plain">{{ streamStatusText }}</el-tag>
       <el-tag v-if="marketSessionText" :type="dashboard?.marketSessionOpen ? 'success' : 'info'" effect="plain">{{ marketSessionText }}</el-tag>
       <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
       <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
@@ -460,12 +480,12 @@ onBeforeUnmount(() => {
 
   <div class="metric-grid dashboard-metrics">
     <el-card class="metric-card"><span class="metric-label">持仓总价值</span><div class="metric-value">{{ marketValue }}</div><div class="metric-detail">{{ valuationStatus === 'stale' ? '参考估值 · 行情已过期' : '按当前持仓与同次行情估值' }}</div></el-card>
-    <el-card class="metric-card"><span class="metric-label">累计买入现金流</span><div class="metric-value">{{ formatMoney(ledger.summary?.totalBuyCashOut, dashboardCurrency) }}</div></el-card>
-    <el-card class="metric-card"><span class="metric-label">累计卖出回款</span><div class="metric-value">{{ formatMoney(ledger.summary?.totalSellCashIn, dashboardCurrency) }}</div></el-card>
-    <el-card class="metric-card"><span class="metric-label">已实现收益</span><div :class="['metric-value', trendClass(ledger.summary?.realizedPnl)]">{{ formatMoney(ledger.summary?.realizedPnl, dashboardCurrency) }}</div></el-card>
+    <el-card class="metric-card"><span class="metric-label">累计买入现金流</span><div class="metric-value">{{ formatMoney(dashboard?.summary.totalBuyCashOut, dashboardCurrency) }}</div></el-card>
+    <el-card class="metric-card"><span class="metric-label">累计卖出回款</span><div class="metric-value">{{ formatMoney(dashboard?.summary.totalSellCashIn, dashboardCurrency) }}</div></el-card>
+    <el-card class="metric-card"><span class="metric-label">已实现收益</span><div :class="['metric-value', trendClass(dashboard?.summary.realizedPnl)]">{{ formatMoney(dashboard?.summary.realizedPnl, dashboardCurrency) }}</div></el-card>
     <el-card class="metric-card">
       <span class="metric-label">账户未实现浮盈（参考）</span>
-      <div :class="['metric-value', trendClass(ledger.summary?.unrealizedPnl)]">{{ unrealizedValue }}</div>
+      <div :class="['metric-value', trendClass(dashboard?.summary.unrealizedPnl)]">{{ unrealizedValue }}</div>
       <div class="metric-detail">{{ unrealizedRate }} · 未扣预计卖出费用</div>
     </el-card>
   </div>
@@ -538,22 +558,22 @@ onBeforeUnmount(() => {
         </div>
         <div class="m-summary-cell">
           <span class="m-summary-label">账户未实现浮盈</span>
-          <strong :class="['m-summary-main', 'num', trendClass(ledger.summary?.unrealizedPnl)]">{{ unrealizedValue }}</strong>
+          <strong :class="['m-summary-main', 'num', trendClass(dashboard?.summary.unrealizedPnl)]">{{ unrealizedValue }}</strong>
           <span class="m-summary-sub num">{{ unrealizedRate }}</span>
         </div>
       </div>
       <div class="m-summary-bottom">
         <div class="m-summary-mini">
           <span class="m-summary-label">累计买入</span>
-          <strong class="m-summary-mini-val num">{{ formatMoney(ledger.summary?.totalBuyCashOut, dashboardCurrency) }}</strong>
+          <strong class="m-summary-mini-val num">{{ formatMoney(dashboard?.summary.totalBuyCashOut, dashboardCurrency) }}</strong>
         </div>
         <div class="m-summary-mini">
           <span class="m-summary-label">累计卖出</span>
-          <strong class="m-summary-mini-val num">{{ formatMoney(ledger.summary?.totalSellCashIn, dashboardCurrency) }}</strong>
+          <strong class="m-summary-mini-val num">{{ formatMoney(dashboard?.summary.totalSellCashIn, dashboardCurrency) }}</strong>
         </div>
         <div class="m-summary-mini">
           <span class="m-summary-label">已实现收益</span>
-          <strong :class="['m-summary-mini-val', 'num', trendClass(ledger.summary?.realizedPnl)]">{{ formatMoney(ledger.summary?.realizedPnl, dashboardCurrency) }}</strong>
+          <strong :class="['m-summary-mini-val', 'num', trendClass(dashboard?.summary.realizedPnl)]">{{ formatMoney(dashboard?.summary.realizedPnl, dashboardCurrency) }}</strong>
         </div>
       </div>
     </section>

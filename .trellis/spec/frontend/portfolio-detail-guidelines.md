@@ -111,3 +111,10 @@ const targetReturnPct = percentInputToRate(form.targetReturnPct)
 // 正确：原子保存服务端汇总，只负责格式化与空值/过期状态展示。
 holdingSummary.value = result.summary
 ```
+
+## 8. 个股详情页 SSE 实时推送增量契约
+
+- 进入/切换证券详情页后，通过 `quotesStore.watchSymbol('MARKET:CODE')` 登记临时订阅，离页或切换时自动释放。
+- 通过 `projectLotsWithQuote(lots, holdingSummary, currentQuote)` 仅对 `status === 'OPEN'` 且有剩余数量的批次与总浮盈执行 `BigInt` 精确十进制实时派生，已结清批次与账务事实保持不变。
+- 通过 `mergeQuoteIntoIntraday(intraday, liveQuote)` 对非 `nav` 曲线按分钟桶替换末点或追加新点（迟到旧包不倒退曲线）。
+- 当 `quotesStore.isLive === true` 时关闭 3 秒 `intraday` 定时轮询并显示「实时推送」状态；SSE 不可用进入 `offline` 时平滑恢复 3 秒降级轮询。

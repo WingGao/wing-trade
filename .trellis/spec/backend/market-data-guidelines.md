@@ -243,3 +243,32 @@ return latest_price * remaining_qty - remaining_cost
 
 - 单元测试（`backend/tests/unit/test_fund_proxy_estimate.py`）：覆盖指数查名、精确估算与当日官方净值回切、参考标的缺失降级、采集器附带刷新与止盈不误固化。
 - 集成测试（`backend/tests/integration/test_fund_proxy_api.py`）：覆盖绑定校验与解绑、Dashboard/Lots 估算估值、`series=auto|nav` 估算分时换算与历史净值切换。
+
+---
+
+## Scenario: 长桥实时推送行情、进程级内存行情中心（MarketDataHub）与 SSE 事件流
+
+### 1. Scope / Trigger
+
+- 触发条件：修改 `quote.provider=longbridge` 配置、`LongbridgeQuoteStream` / `LongbridgeQuoteProvider`、`MarketDataHub` 内存缓存与落盘策略、或 `GET /api/v1/quotes/stream` SSE 推送协议。
+- 行情依然是派生展示数据，任何上游推流断连、凭据过期或 SSE 中断均不得阻塞账务写操作或污染账务事实。
+
+### 2. Signatures
+
+- `SUPPORTED_QUOTE_PROVIDERS = frozenset({"eastmoney", "longbridge", "mock"})`；`quote.longbridge.{app_key,app_secret,access_token,enable_overnight,http_url,quote_ws_url}` 遵循 `YAML > env > 默认值`，`provider=longbridge` 时三元组必填。
+- `to_longbridge_symbol(canonical) -> str | None` / `from_longbridge_symbol(lb_symbol) -> str | None`：仅映射 `SH`/`SZ`/`US`，`BJ`/`OF` 返回 `None` 并由东方财富/腾讯备源补齐。
+- `LongbridgeQuoteStream`：后台线程运行 `QuoteContext`，通过 `loop.call_soon_threadsafe(...)` 桥接主事件循环；单连接订阅上限 500 只（按持仓 > proxy > 自选 > 临时查看优先级裁剪），断线采用指数退避（5s -> 10s -> 20s -> 60s）自动重连。
+- `MarketDataHub`：由 FastAPI `lifespan`（`create_tables=True` 时）启停；维护 `_quotes`（原始报价，不落盘估算值）、300ms 节流合并广播、30s Write-behind 异步落盘（`evaluate_targets=False`）与停机 flush。
+- `GET /api/v1/quotes/stream?symbols=...&accountId=...`：复用 Cookie 鉴权（未登录 401），输出 `text/event-stream; charset=utf-8` 与 `X-Accel-Buffering: no`，推送 `event: snapshot`、`event: quote`、`event: status` 与每 25 秒 `: heartbeat`。
+
+### 3. Contracts
+
+- **基线与增量合并**：长桥 `PushQuote` 不含 `prev_close`，新增订阅必须先调 `ctx.quote(added)` 缓存 `LongbridgeBaseline`（含美股 `regular_close`），再用 `Decimal` 精确计算涨跌幅并过滤非正数报价。
+- **内存优先与零阻塞读取**：`QuoteService._read_raw_cached()` 优先合并内存中心与 `quote_cache` 中更新的快照；当 `MarketDataHub.is_push_active()` 且全部受支持标的均有未过期内存快照时，`DashboardService._load_snapshots(mode="auto")` 直接零阻塞返回内存快照。
+- **场外基金估算联动**：`MarketDataHub.publish()` 收到参考标的报价更新时，在内存中 `O(k)` 即时重算绑定场外基金的有效估算快照并随同广播；落盘仅写入原始官方净值与参考标的行情，绝不污染 `quote_cache`。
+- **优雅停机与测试隔离**：`MarketDataHub.stop()` 先向全部在线 SSE 订阅者发送 `__close__` 退出信号再刷盘，防止长连接阻塞停机；`create_app(create_tables=False)` 测试模式不自动连接本地 `ledger.db` 或公网推流。
+
+### 4. Tests Required
+
+- 单元测试：`backend/tests/unit/test_config.py`（长桥配置与校验）、`backend/tests/unit/test_longbridge_adapter.py`（代码映射、基线/增量合并、美股盘后基准、500 上限与线程桥接）、`backend/tests/unit/test_quote_hub.py`（内存发布、基金代理联动估算、300ms 合并、落盘纯净与临时订阅引用计数）。
+- 集成测试：`backend/tests/integration/test_quote_stream_api.py`（未登录 401、首帧 `snapshot`、增量 `quote`、多用户隔离及内存优先 Dashboard 估值）。

@@ -107,11 +107,13 @@ import CreateAccountDialog from './components/CreateAccountDialog.vue'
 import { useAccountsStore } from './stores/accounts'
 import { useAuthStore } from './stores/auth'
 import { useLedgerStore } from './stores/ledger'
+import { useQuotesStore } from './stores/quotes'
 import { useViewport } from './utils/viewport'
 
 const auth = useAuthStore()
 const accountsStore = useAccountsStore()
 const ledgerStore = useLedgerStore()
+const quotesStore = useQuotesStore()
 const route = useRoute()
 const router = useRouter()
 const { isMobile } = useViewport()
@@ -184,6 +186,7 @@ async function handleLogout(): Promise<void> {
   loggingOut.value = true
   try {
     await auth.logout()
+    quotesStore.reset()
     accountsStore.reset()
     await router.replace('/login')
   } finally {
@@ -194,8 +197,13 @@ async function handleLogout(): Promise<void> {
 watch(
   () => auth.user?.id,
   (userId) => {
-    if (userId) void accountsStore.loadAccounts()
-    else accountsStore.reset()
+    if (userId) {
+      void accountsStore.loadAccounts()
+      quotesStore.connect()
+    } else {
+      quotesStore.reset()
+      accountsStore.reset()
+    }
   },
   { immediate: true },
 )
@@ -203,6 +211,7 @@ watch(
 onMounted(() => {
   setUnauthorizedHandler(() => {
     auth.clearAuth()
+    quotesStore.reset()
     accountsStore.reset()
     if (router.currentRoute.value.path !== '/login') {
       void router.replace({ path: '/login', query: { redirect: router.currentRoute.value.fullPath } })
@@ -211,6 +220,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  quotesStore.disconnect()
   setUnauthorizedHandler(null)
 })
 </script>

@@ -38,6 +38,8 @@ export type MarketSessionPhase = 'pre' | 'regular' | 'post' | 'closed'
 
 export type ValuationStatus = 'fresh' | 'stale' | 'partial' | 'unavailable' | 'empty'
 
+export type QuoteStreamState = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'offline'
+
 export interface Account {
   id: string
   name: string
