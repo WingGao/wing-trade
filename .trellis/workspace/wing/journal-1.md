@@ -601,3 +601,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: 个股新增近20个交易日平均振幅并在现价低批上卖列展示
+<!-- trellis-session: v=2 fp=537d6d1311c39520 -->
+
+**Date**: 2026-11-25
+**Task**: 个股新增近20个交易日平均振幅并在现价低批上卖列展示
+**Branch**: `master`
+
+### Summary
+
+新增 security_daily_metrics 缓存表与日 K 线近 20 个已收盘交易日平均振幅服务，扩展总览接口字段，并在活动仓位现价低批上卖列下方新增 20日振 展示行（不改表头与排序）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b44d9a` | feat(backend): 新增个股近20个已收盘交易日平均振幅计算、缓存与总览接口字段 |
+| `1ce7eba` | feat(frontend): 活动仓位现价低批上卖列新增近20日平均振幅展示行 |
+
+### Status
+
+[OK] **Completed**

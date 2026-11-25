@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~603 | Active |
+| `journal-1.md` | ~626 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-11-25 | 个股新增近20个交易日平均振幅并在现价低批上卖列展示 | `0b44d9a`, `1ce7eba` | `master` |
 | 24 | 2026-11-25 | 实现三层止盈实时检测与企业微信 Webhook 推送 | `df94672`, `2006fc8` | `master` |
 | 23 | 2026-11-25 | 活动仓位与详情页增加上次卖出价并对齐双端展示 | `37585c4`, `9b0ce83` | `master` |
 | 22 | 2026-11-25 | 前后端时间默认为北京时间 | `3d5b383`, `44df945` | `master` |
