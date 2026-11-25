@@ -493,3 +493,42 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: 长桥实时推送行情与前端 SSE 事件流
+<!-- trellis-session: v=2 fp=b09c3fcb004bde21 -->
+
+**Date**: 2026-11-25
+**Task**: 长桥实时推送行情与前端 SSE 事件流
+**Branch**: `master`
+
+### Summary
+
+接入长桥 OpenAPI 实时推流与东财/腾讯备源、进程级内存行情中心 MarketDataHub、/api/v1/quotes/stream SSE 推送端点及前端 BigInt 精确十进制派生估值与零轮询改造，全量后端 172 项测试与前端构建通过。
+
+### Main Changes
+
+- 新增 backend/app/market_data/longbridge_adapter.py 与 quote.longbridge 配置及依赖
+- 新增 backend/app/market_data/hub.py 与 GET /api/v1/quotes/stream SSE 推送端点
+- 新增 frontend/src/utils/valuation.ts，重构 useQuotesStore 及首页/详情页实时估值
+- 同步更新后端与前端 Trellis 规范文档
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `486563e` | feat(market-data): 接入长桥 OpenAPI 配置与实时推流适配器 |
+| `e450bfd` | feat(market-data): 实现进程级内存行情中心与 SSE 推送端点 |
+| `2e42b8a` | feat(frontend): 接入全局 SSE 实时行情与精确十进制派生估值并更新规范 |
+
+### Testing
+
+- [OK] 后端 ruff/mypy/pytest 172 passed，前端 type-check 与 build 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 在具备 Chromium 的环境中执行 pnpm --dir frontend exec playwright install chromium && pnpm --dir frontend run test:e2e
