@@ -668,3 +668,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 28: 清仓关注与目标买回价提醒
+<!-- trellis-session: v=2 fp=5e94c468b270cac9 -->
+
+**Date**: 2026-11-26
+**Task**: 清仓关注与目标买回价提醒
+**Branch**: `master`
+
+### Summary
+
+支持关注已有/清仓证券、前端开关混入首页列表及目标买回价企微到价提醒，新增 0008 无损迁移与独立 /api/v1/watchlist 聚合接口
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c280b2d` | feat(backend): 新增关注目标买回价、分离查询接口与企微到价提醒 |
+| `b6a46ba` | feat(frontend): 支持首页开关混入关注标的及目标买回价交互 |
+
+### Status
+
+[OK] **Completed**
