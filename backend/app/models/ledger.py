@@ -62,6 +62,8 @@ class Security(Base):
 
 
 class WatchlistItem(Base):
+    """账户维度的关注证券及可选目标买回价与提醒配置。"""
+
     __tablename__ = "watchlist_items"
     __table_args__ = (UniqueConstraint("account_id", "security_id", name="uq_watchlist_account_security"),)
 
@@ -69,7 +71,11 @@ class WatchlistItem(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     security_id: Mapped[str] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    target_buy_price: Mapped[Decimal | None] = mapped_column(ExactDecimal(6))
+    alert_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    note: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
 class Strategy(Base):

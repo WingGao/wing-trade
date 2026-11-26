@@ -84,7 +84,48 @@ class ProfitAlertDelivery(Base):
     )
 
 
+class BuybackAlertDelivery(Base):
+    """目标买回价推送成功送达记录，用于按北京时间自然日与目标价指纹幂等去重。"""
+
+    __tablename__ = "buyback_alert_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "watchlist_item_id",
+            "target_signature",
+            "trigger_date",
+            "channel_type",
+            name="uq_buyback_alert_deliveries_dedup",
+        ),
+        Index("ix_buyback_alert_deliveries_user_date", "user_id", "trigger_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    security_id: Mapped[str] = mapped_column(
+        ForeignKey("securities.id", ondelete="CASCADE"), nullable=False
+    )
+    watchlist_item_id: Mapped[str] = mapped_column(
+        ForeignKey("watchlist_items.id", ondelete="CASCADE"), nullable=False
+    )
+    target_signature: Mapped[str] = mapped_column(String(128), nullable=False)
+    trigger_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    triggered_price: Mapped[Decimal] = mapped_column(ExactDecimal(6), nullable=False)
+    target_price: Mapped[Decimal] = mapped_column(ExactDecimal(6), nullable=False)
+    is_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
 __all__ = [
+    "BuybackAlertDelivery",
     "NotificationChannel",
     "ProfitAlertDelivery",
 ]

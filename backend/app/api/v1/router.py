@@ -27,7 +27,12 @@ from app.api.deps import (
 )
 from app.api.schemas.account import AccountCreate
 from app.api.schemas.dashboard import DashboardRead
-from app.api.schemas.security import SecurityCreate, SecurityProxyUpdate, WatchlistItemCreate
+from app.api.schemas.security import (
+    SecurityCreate,
+    SecurityProxyUpdate,
+    WatchlistItemCreate,
+    WatchlistItemUpdate,
+)
 from app.api.schemas.target import ProfitSettingWrite, ProfitTargetCreate, ProfitTargetPatch
 from app.api.schemas.trade import (
     BuyTradeRequest,
@@ -87,6 +92,7 @@ from app.services.position_refresh import PositionRefreshService
 from app.services.profit_settings import ProfitSettingsService
 from app.services.recalculate import RecalculationService
 from app.services.target import TargetService
+from app.services.watchlist import WatchlistService
 
 def _extract_longbridge_kline_fetcher(provider: Any) -> Any:
     """若当前行情源包含长桥主源，返回其可复用的日 K 线拉取方法。"""
@@ -272,6 +278,8 @@ def target_data(target: ProfitTarget) -> dict[str, Any]:
 
 
 def lot_data(lot: Lot, *, include_targets: bool = True) -> dict[str, Any]:
+    """将持仓批次模型序列化为前端可读字段，包含原始买入成交价。"""
+    buy_trade = getattr(lot, "buy_trade", None)
     data: dict[str, Any] = {
         "id": lot.id,
         "buyTradeId": lot.buy_trade_id,
@@ -284,6 +292,7 @@ def lot_data(lot: Lot, *, include_targets: bool = True) -> dict[str, Any]:
         "remainingQty": _fmt(lot.remaining_qty),
         "remainingCost": _fmt(lot.remaining_cost),
         "unitCost": _fmt(lot.unit_cost, 6),
+        "purchasePrice": _fmt(buy_trade.price, 6) if buy_trade is not None else None,
         "executedAt": _dt(lot.executed_at),
         "status": lot.status,
     }
@@ -525,39 +534,118 @@ def update_security_proxy(
 
 
 @router.get("/watchlist")
-def list_watchlist(
+async def list_watchlist(
     account_id: str | None = Query(default=None, alias="accountId"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """返回当前用户指定账户的自选股列表。"""
-    account_id = resolve_account(session, account_id, user_id=current_user.id)
-    rows = session.execute(select(WatchlistItem, Security).join(Security, Security.id == WatchlistItem.security_id).where(WatchlistItem.account_id == account_id).order_by(WatchlistItem.sort_order, WatchlistItem.created_at)).all()
-    return [{"id": item.id, "accountId": item.account_id, "securityId": item.security_id, "sortOrder": item.sort_order, "security": security_data(security)} for item, security in rows]
+    """返回当前用户指定账户的关注列表（聚合行情、上次卖出价、目标买回价偏离与历史收益）。"""
+    resolved_account_id = resolve_account(session, account_id, user_id=current_user.id)
+    amplitude_service = (
+        daily_amplitude_service
+        if quote_collector.provider.name != "mock"
+        else DailyAmplitudeService(network_enabled=False)
+    )
+    return await WatchlistService.list_enriched(
+        session,
+        account_id=resolved_account_id,
+        quote_service=quote_collector.service,
+        amplitude_service=amplitude_service,
+    )
 
 
 @router.post("/watchlist", status_code=status.HTTP_201_CREATED)
-def add_watchlist(
+async def add_watchlist(
     payload: WatchlistItemCreate,
     account_id: str | None = Query(default=None, alias="accountId"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """将证券加入当前用户的自选列表。"""
+    """将证券加入当前用户的关注列表（已存在时幂等更新配置）并返回聚合项。"""
     begin_write(session)
     try:
         account = resolve_account(
             session, account_id or payload.account_id, user_id=current_user.id
         )
         security = _security_or_404(session, payload.security_id)
-        item = session.scalar(select(WatchlistItem).where(WatchlistItem.account_id == account, WatchlistItem.security_id == security.id))
-        if item is None:
-            item = WatchlistItem(account_id=account, security_id=security.id, sort_order=payload.sort_order)
-            session.add(item)
-            session.flush()
+        item = WatchlistService.upsert(
+            session,
+            account_id=account,
+            security_id=security.id,
+            sort_order=payload.sort_order,
+            target_buy_price=payload.target_buy_price,
+            alert_enabled=payload.alert_enabled,
+            note=payload.note,
+            target_buy_price_provided="target_buy_price" in payload.model_fields_set,
+            alert_enabled_provided="alert_enabled" in payload.model_fields_set,
+            note_provided="note" in payload.model_fields_set,
+        )
         finish_write(session, True)
         _notify_quote_hub_scope(session)
-        return {"id": item.id, "accountId": item.account_id, "securityId": item.security_id, "sortOrder": item.sort_order}
+        enriched = await WatchlistService.list_enriched(
+            session,
+            account_id=account,
+            quote_service=quote_collector.service,
+            amplitude_service=DailyAmplitudeService(network_enabled=False),
+            security_ids_filter=[item.security_id],
+        )
+        if enriched:
+            return enriched[0]
+        return {
+            "id": item.id,
+            "accountId": item.account_id,
+            "securityId": item.security_id,
+            "sortOrder": item.sort_order,
+            "targetBuyPrice": _fmt(item.target_buy_price, 6),
+            "alertEnabled": bool(item.alert_enabled),
+            "note": item.note,
+        }
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.patch("/watchlist/{security_id}")
+async def update_watchlist(
+    security_id: str,
+    payload: WatchlistItemUpdate,
+    account_id: str | None = Query(default=None, alias="accountId"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """局部更新当前用户关注证券的目标买回价、企微提醒开关与备注。"""
+    begin_write(session)
+    try:
+        account = resolve_account(session, account_id, user_id=current_user.id)
+        item = WatchlistService.update(
+            session,
+            account_id=account,
+            security_id=security_id,
+            fields_set=set(payload.model_fields_set),
+            sort_order=payload.sort_order,
+            target_buy_price=payload.target_buy_price,
+            alert_enabled=payload.alert_enabled,
+            note=payload.note,
+        )
+        finish_write(session, True)
+        enriched = await WatchlistService.list_enriched(
+            session,
+            account_id=account,
+            quote_service=quote_collector.service,
+            amplitude_service=DailyAmplitudeService(network_enabled=False),
+            security_ids_filter=[item.security_id],
+        )
+        if enriched:
+            return enriched[0]
+        return {
+            "id": item.id,
+            "accountId": item.account_id,
+            "securityId": item.security_id,
+            "sortOrder": item.sort_order,
+            "targetBuyPrice": _fmt(item.target_buy_price, 6),
+            "alertEnabled": bool(item.alert_enabled),
+            "note": item.note,
+        }
     except Exception:
         finish_write(session, False)
         raise
@@ -570,11 +658,16 @@ def remove_watchlist(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> None:
-    """从当前用户自选列表中移除指定证券。"""
+    """从当前用户关注列表中移除指定证券。"""
     begin_write(session)
     try:
         account = resolve_account(session, account_id, user_id=current_user.id)
-        item = session.scalar(select(WatchlistItem).where(WatchlistItem.account_id == account, WatchlistItem.security_id == security_id))
+        item = session.scalar(
+            select(WatchlistItem).where(
+                WatchlistItem.account_id == account,
+                WatchlistItem.security_id == security_id,
+            )
+        )
         if item is not None:
             session.delete(item)
         finish_write(session, True)
@@ -921,6 +1014,7 @@ def list_lots(
     security = _security_or_404(session, security_id)
     stmt = (
         select(Lot)
+        .options(selectinload(Lot.buy_trade))
         .where(
             Lot.account_id == account, Lot.security_id == security_id, Lot.strategy_id == strategy
         )

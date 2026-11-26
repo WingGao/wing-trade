@@ -38,6 +38,30 @@ class TakeProfitAlertItem:
     is_estimated: bool
 
 
+@dataclass(frozen=True, slots=True)
+class BuybackAlertItem:
+    """单条命中目标买回价的关注提醒上下文。"""
+
+    user_id: str
+    account_id: str
+    account_name: str
+    security_id: str
+    watchlist_item_id: str
+    security_name: str
+    canonical_symbol: str
+    market: str
+    currency: str
+    target_signature: str
+    last_price: Decimal
+    target_price: Decimal
+    vs_target_pct: Decimal | None
+    last_sell_price: Decimal | None
+    vs_last_sell_pct: Decimal | None
+    has_open_position: bool
+    note: str | None
+    is_estimated: bool
+
+
 def _currency_symbol(currency: str) -> str:
     """返回币种展示符号。"""
     return "$" if currency.upper() == "USD" else "¥"
@@ -71,6 +95,14 @@ def _fmt_rate_pct(rate: Decimal | None) -> str:
     if rate is None:
         return "--"
     pct = rate * Decimal("100")
+    sign = "+" if pct > 0 else ""
+    return f"{sign}{pct:.2f}%"
+
+
+def _fmt_percent_value(pct: Decimal | None) -> str:
+    """将已乘以 100 的百分数（如 -1.4085）格式化为带符号百分数（-1.41%）。"""
+    if pct is None:
+        return "--"
     sign = "+" if pct > 0 else ""
     return f"{sign}{pct:.2f}%"
 
@@ -174,6 +206,80 @@ def format_take_profit_markdown_batches(
             items, triggered_at=triggered_at, max_bytes=max_bytes
         )
     ]
+
+
+def _render_buyback_block(index: int, item: BuybackAlertItem) -> str:
+    """将单条买回价命中项渲染为紧凑易读的企微 Markdown 段落。"""
+    est_badge = ' <font color="warning">[盘中估算]</font>' if item.is_estimated else ""
+    price_label = "估算净值" if item.is_estimated else "最新价"
+    status_label = "持仓中（低位加仓参考）" if item.has_open_position else "空仓待回接"
+    last_price_text = _fmt_price(item.last_price, market=item.market)
+    target_price_text = _fmt_price(item.target_price, market=item.market)
+    vs_target_text = _fmt_percent_value(item.vs_target_pct)
+    lines = [
+        f"**{index}. {item.security_name}（{item.canonical_symbol}）**{est_badge}",
+        f"> 账户：{item.account_name} | 状态：{status_label}",
+        f'> {price_label}：<font color="info">{last_price_text}</font>'
+        f" | 目标买回价：{target_price_text}（{vs_target_text}）",
+    ]
+    if item.last_sell_price is not None:
+        last_sell_text = _fmt_price(item.last_sell_price, market=item.market)
+        vs_sell_text = _fmt_percent_value(item.vs_last_sell_pct)
+        lines.append(f"> 上次卖出：{last_sell_text} | 较上卖：{vs_sell_text}")
+    if item.note:
+        lines.append(f"> 备注：{item.note}")
+    return "\n".join(lines)
+
+
+def build_buyback_markdown_batches(
+    items: Sequence[BuybackAlertItem],
+    *,
+    triggered_at: datetime,
+    max_bytes: int = _WECOM_SAFE_MAX_BYTES,
+) -> list[tuple[list[BuybackAlertItem], str]]:
+    """将同一用户的多条买回价命中分批渲染为不超过企微上限的 Markdown 卡片。"""
+    if not items:
+        return []
+    ts = triggered_at.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    total = len(items)
+    rendered_pairs = [
+        (item, _render_buyback_block(idx + 1, item)) for idx, item in enumerate(items)
+    ]
+
+    def _build_header(part: int | None = None, total_parts: int | None = None) -> str:
+        """构造买回价提醒卡片标题头部。"""
+        suffix = f"（{part}/{total_parts}）" if part is not None and total_parts is not None else ""
+        return f"### 买回价提醒 · 命中 {total} 项{suffix}\n> 时间：{ts}（北京时间）\n\n"
+
+    raw_groups: list[list[tuple[BuybackAlertItem, str]]] = []
+    current_group: list[tuple[BuybackAlertItem, str]] = []
+    header_reserve = len(_build_header(99, 99).encode("utf-8"))
+    current_bytes = header_reserve
+
+    for pair in rendered_pairs:
+        block_bytes = len((pair[1] + "\n\n").encode("utf-8"))
+        if current_group and current_bytes + block_bytes > max_bytes:
+            raw_groups.append(current_group)
+            current_group = [pair]
+            current_bytes = header_reserve + block_bytes
+        else:
+            current_group.append(pair)
+            current_bytes += block_bytes
+    if current_group:
+        raw_groups.append(current_group)
+
+    total_parts = len(raw_groups)
+    batches: list[tuple[list[BuybackAlertItem], str]] = []
+    for part_idx, group in enumerate(raw_groups, start=1):
+        header = (
+            _build_header(part_idx, total_parts)
+            if total_parts > 1
+            else _build_header()
+        )
+        batch_items = [item for item, _ in group]
+        batch_text = header + "\n\n".join(block for _, block in group)
+        batches.append((batch_items, batch_text))
+    return batches
 
 
 def format_test_markdown(*, user_label: str, sent_at: datetime) -> str:

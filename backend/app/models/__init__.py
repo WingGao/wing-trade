@@ -18,12 +18,13 @@ from .ledger import (
     TradeMatch,
     WatchlistItem,
 )
-from .notification import NotificationChannel, ProfitAlertDelivery
+from .notification import BuybackAlertDelivery, NotificationChannel, ProfitAlertDelivery
 
 __all__ = [
     "Account",
     "AuditEvent",
     "Base",
+    "BuybackAlertDelivery",
     "Cycle",
     "EmailVerificationCode",
     "Lot",

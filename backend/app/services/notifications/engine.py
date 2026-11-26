@@ -14,19 +14,33 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.domain.enums import TargetStatus
+from app.domain.enums import TargetStatus, TradeSide, TradeStatus
 from app.domain.exceptions import NotificationDeliveryError
 from app.domain.markets import currency_for_market
 from app.domain.precision import round_amount, round_price
 from app.domain.time import BEIJING_TZ
 from app.market_data.provider import QuoteSnapshot, canonical_symbol
-from app.models.ledger import Account, Lot, ProfitSetting, ProfitTarget, Security
-from app.models.notification import NotificationChannel, ProfitAlertDelivery
+from app.models.ledger import (
+    Account,
+    Lot,
+    ProfitSetting,
+    ProfitTarget,
+    Security,
+    Trade,
+    WatchlistItem,
+)
+from app.models.notification import BuybackAlertDelivery, NotificationChannel, ProfitAlertDelivery
+from app.services.accounting import AccountingService
 from app.services.profit_settings import ProfitSettingsService
 from app.services.target import TargetService
 
 from .channels import WECOM_CHANNEL_TYPE, PushChannel, WeComWebhookChannel
-from .formatter import TakeProfitAlertItem, build_take_profit_markdown_batches
+from .formatter import (
+    BuybackAlertItem,
+    TakeProfitAlertItem,
+    build_buyback_markdown_batches,
+    build_take_profit_markdown_batches,
+)
 
 if TYPE_CHECKING:
     from app.market_data.hub import MarketDataHub
@@ -54,6 +68,11 @@ def build_target_signature(
     )
 
 
+def build_buyback_signature(target_price: Decimal) -> str:
+    """构造目标买回价稳定指纹，当目标买回价修改时自动允许重新触发提醒。"""
+    return f"BUYBACK|{target_price:.6f}"
+
+
 @dataclass(frozen=True, slots=True)
 class _DispatchJob:
     """单个用户某个启用渠道在本轮需要发送的止盈命中集合。"""
@@ -65,10 +84,29 @@ class _DispatchJob:
 
 
 @dataclass(frozen=True, slots=True)
+class _BuybackDispatchJob:
+    """单个用户某个启用渠道在本轮需要发送的目标买回价命中集合。"""
+
+    user_id: str
+    channel_type: str
+    target_url: str
+    items: list[BuybackAlertItem]
+
+
+@dataclass(frozen=True, slots=True)
 class _DeliveredRecord:
     """单笔已确认外部发送成功的止盈提醒记录。"""
 
     item: TakeProfitAlertItem
+    channel_type: str
+    trigger_date: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DeliveredBuybackRecord:
+    """单条已确认外部发送成功的买回价提醒记录。"""
+
+    item: BuybackAlertItem
     channel_type: str
     trigger_date: str
 
@@ -329,6 +367,190 @@ class ProfitAlertEngine:
             ]
             return trigger_date, jobs
 
+    def _collect_buyback_dispatch_jobs(
+        self,
+        triggerable: Mapping[str, QuoteSnapshot],
+        now: datetime,
+    ) -> tuple[str, list[_BuybackDispatchJob]]:
+        """在短读事务内评估所有启用推送用户的关注买回价目标并生成去重后的待发任务。"""
+        trigger_date = now.astimezone(BEIJING_TZ).date().isoformat()
+        with self._session_factory() as session:
+            channels = list(
+                session.scalars(
+                    select(NotificationChannel).where(NotificationChannel.enabled.is_(True))
+                ).all()
+            )
+            active_channels: dict[str, list[NotificationChannel]] = {}
+            for ch in channels:
+                if not ch.webhook_url or ch.channel_type not in self._channels:
+                    continue
+                if self._in_failure_cooldown(ch.user_id, ch.channel_type, now):
+                    continue
+                active_channels.setdefault(ch.user_id, []).append(ch)
+            if not active_channels:
+                return trigger_date, []
+
+            enabled_user_ids = set(active_channels.keys())
+            securities_by_symbol = self._quote_hub.quote_service.securities_for_symbols(
+                session, list(triggerable.keys())
+            )
+            if not securities_by_symbol:
+                return trigger_date, []
+            securities_by_id = {sec.id: sec for sec in securities_by_symbol.values()}
+
+            accounts = list(
+                session.scalars(
+                    select(Account).where(Account.user_id.in_(enabled_user_ids))
+                ).all()
+            )
+            if not accounts:
+                return trigger_date, []
+            accounts_by_id = {acc.id: acc for acc in accounts}
+
+            watch_items = list(
+                session.scalars(
+                    select(WatchlistItem).where(
+                        WatchlistItem.alert_enabled.is_(True),
+                        WatchlistItem.target_buy_price.is_not(None),
+                        WatchlistItem.security_id.in_(securities_by_id.keys()),
+                        WatchlistItem.account_id.in_(accounts_by_id.keys()),
+                    )
+                ).all()
+            )
+            eligible_items = [
+                item
+                for item in watch_items
+                if item.target_buy_price is not None and item.target_buy_price > 0
+            ]
+            if not eligible_items:
+                return trigger_date, []
+
+            # 统计各 (account_id, security_id) 是否有未结清仓位，用于消息卡片状态展示（不阻塞触发）
+            watched_account_ids = {item.account_id for item in eligible_items}
+            watched_sec_ids = {item.security_id for item in eligible_items}
+            open_lots = list(
+                session.scalars(
+                    select(Lot).where(
+                        Lot.status == "OPEN",
+                        Lot.account_id.in_(watched_account_ids),
+                        Lot.security_id.in_(watched_sec_ids),
+                    )
+                ).all()
+            )
+            open_scopes = {
+                (lot.account_id, lot.security_id)
+                for lot in open_lots
+                if lot.remaining_qty > 0
+            }
+
+            sell_trades = list(
+                session.scalars(
+                    select(Trade)
+                    .where(
+                        Trade.account_id.in_(watched_account_ids),
+                        Trade.security_id.in_(watched_sec_ids),
+                        Trade.side == TradeSide.SELL.value,
+                        Trade.status == TradeStatus.ACTIVE.value,
+                    )
+                    .order_by(Trade.executed_at.desc(), Trade.created_at.desc(), Trade.id.desc())
+                ).all()
+            )
+            latest_sell_by_scope: dict[tuple[str, str], Trade] = {}
+            for trade in sell_trades:
+                scope = (trade.account_id, trade.security_id)
+                if scope not in latest_sell_by_scope:
+                    latest_sell_by_scope[scope] = trade
+
+            delivered_rows = list(
+                session.scalars(
+                    select(BuybackAlertDelivery).where(
+                        BuybackAlertDelivery.user_id.in_(enabled_user_ids),
+                        BuybackAlertDelivery.trigger_date == trigger_date,
+                    )
+                ).all()
+            )
+            delivered_keys = {
+                (
+                    row.user_id,
+                    row.watchlist_item_id,
+                    row.target_signature,
+                    row.channel_type,
+                )
+                for row in delivered_rows
+            }
+
+            grouped_items: dict[tuple[str, str, str], list[BuybackAlertItem]] = {}
+            sorted_eligible = sorted(
+                eligible_items, key=lambda row: (row.sort_order, row.created_at, row.id)
+            )
+            for item in sorted_eligible:
+                account = accounts_by_id.get(item.account_id)
+                security = securities_by_id.get(item.security_id)
+                if account is None or security is None or not account.user_id:
+                    continue
+                canonical = self._quote_hub.quote_service.security_symbol(security)
+                snapshot = triggerable.get(canonical)
+                if snapshot is None or item.target_buy_price is None:
+                    continue
+                if snapshot.last_price > item.target_buy_price:
+                    continue
+                user_channels = active_channels.get(account.user_id, ())
+                if not user_channels:
+                    continue
+
+                signature = build_buyback_signature(item.target_buy_price)
+                last_sell = latest_sell_by_scope.get((account.id, security.id))
+                last_sell_price = last_sell.price if last_sell is not None else None
+                sec_name = (security.name or "").strip() or security.symbol
+                alert_item = BuybackAlertItem(
+                    user_id=account.user_id,
+                    account_id=account.id,
+                    account_name=account.name,
+                    security_id=security.id,
+                    watchlist_item_id=item.id,
+                    security_name=sec_name,
+                    canonical_symbol=canonical,
+                    market=security.market.upper(),
+                    currency=currency_for_market(security.market),
+                    target_signature=signature,
+                    last_price=snapshot.last_price,
+                    target_price=item.target_buy_price,
+                    vs_target_pct=AccountingService.price_diff_pct(
+                        snapshot.last_price, item.target_buy_price
+                    ),
+                    last_sell_price=last_sell_price,
+                    vs_last_sell_pct=AccountingService.price_diff_pct(
+                        snapshot.last_price, last_sell_price
+                    ),
+                    has_open_position=(account.id, security.id) in open_scopes,
+                    note=item.note,
+                    is_estimated=bool(snapshot.is_estimated),
+                )
+                for ch in user_channels:
+                    assert ch.webhook_url is not None
+                    dedup_key = (
+                        account.user_id,
+                        item.id,
+                        signature,
+                        ch.channel_type,
+                    )
+                    if dedup_key in delivered_keys:
+                        continue
+                    bucket_key = (account.user_id, ch.channel_type, ch.webhook_url)
+                    grouped_items.setdefault(bucket_key, []).append(alert_item)
+
+            jobs = [
+                _BuybackDispatchJob(
+                    user_id=user_id,
+                    channel_type=channel_type,
+                    target_url=target_url,
+                    items=items,
+                )
+                for (user_id, channel_type, target_url), items in grouped_items.items()
+                if items
+            ]
+            return trigger_date, jobs
+
     @staticmethod
     def _evaluate_lot_targets(
         *,
@@ -529,13 +751,49 @@ class ProfitAlertEngine:
             session.commit()
         return recorded
 
+    def _record_buyback_deliveries(
+        self,
+        delivered: Sequence[_DeliveredBuybackRecord],
+        now: datetime,
+    ) -> int:
+        """在短写事务中幂等持久化成功送达的买回价提醒记录。"""
+        if not delivered:
+            return 0
+        recorded = 0
+        with self._session_factory() as session:
+            for rec in delivered:
+                item = rec.item
+                try:
+                    with session.begin_nested():
+                        session.add(
+                            BuybackAlertDelivery(
+                                user_id=item.user_id,
+                                account_id=item.account_id,
+                                security_id=item.security_id,
+                                watchlist_item_id=item.watchlist_item_id,
+                                target_signature=item.target_signature,
+                                trigger_date=rec.trigger_date,
+                                channel_type=rec.channel_type,
+                                triggered_price=item.last_price,
+                                target_price=item.target_price,
+                                is_estimated=item.is_estimated,
+                                sent_at=now,
+                            )
+                        )
+                        session.flush()
+                    recorded += 1
+                except IntegrityError:
+                    continue
+            session.commit()
+        return recorded
+
     async def evaluate_and_dispatch(
         self,
         symbols: Sequence[str],
         *,
         now: datetime | None = None,
     ) -> int:
-        """针对指定变更标的执行一次完整的止盈评估、外部推送与去重落库，返回成功推送笔数。"""
+        """针对指定变更标的执行一次完整的止盈与目标买回价评估、外部推送与去重落库，返回成功推送笔数。"""
         if not symbols:
             return 0
         current = now or self._now()
@@ -552,7 +810,10 @@ class ProfitAlertEngine:
         trigger_date, jobs = await asyncio.to_thread(
             self._collect_dispatch_jobs, triggerable, current
         )
-        if not jobs:
+        buyback_date, buyback_jobs = await asyncio.to_thread(
+            self._collect_buyback_dispatch_jobs, triggerable, current
+        )
+        if not jobs and not buyback_jobs:
             return 0
 
         delivered_records: list[_DeliveredRecord] = []
@@ -583,4 +844,39 @@ class ProfitAlertEngine:
 
         if delivered_records:
             await asyncio.to_thread(self._record_deliveries, delivered_records, current)
-        return len(delivered_records)
+
+        delivered_buyback_records: list[_DeliveredBuybackRecord] = []
+        for buyback_job in buyback_jobs:
+            if self._in_failure_cooldown(buyback_job.user_id, buyback_job.channel_type, current):
+                continue
+            channel = self._channels.get(buyback_job.channel_type)
+            if channel is None:
+                continue
+            buyback_batches = build_buyback_markdown_batches(
+                buyback_job.items, triggered_at=current
+            )
+            job_failed = False
+            for batch_items, message in buyback_batches:
+                ok = await self._send_with_retry(channel, buyback_job.target_url, message)
+                if ok:
+                    for item in batch_items:
+                        delivered_buyback_records.append(
+                            _DeliveredBuybackRecord(
+                                item=item,
+                                channel_type=buyback_job.channel_type,
+                                trigger_date=buyback_date,
+                            )
+                        )
+                else:
+                    job_failed = True
+                    break
+            if job_failed and self._failure_cooldown_seconds > 0:
+                self._failure_cooldown_until[
+                    (buyback_job.user_id, buyback_job.channel_type)
+                ] = current + timedelta(seconds=self._failure_cooldown_seconds)
+
+        if delivered_buyback_records:
+            await asyncio.to_thread(
+                self._record_buyback_deliveries, delivered_buyback_records, current
+            )
+        return len(delivered_records) + len(delivered_buyback_records)

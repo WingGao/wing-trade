@@ -28,9 +28,10 @@ def test_startup_schema_migrates_empty_database(tmp_path: Path) -> None:
             'user_sessions',
             'notification_channels',
             'profit_alert_deliveries',
+            'buyback_alert_deliveries',
             'security_daily_metrics',
         } <= tables
-        assert revision == '0007_security_daily_metrics'
+        assert revision == '0008_watchlist_buyback_alerts'
     finally:
         engine.dispose()
 
@@ -66,7 +67,7 @@ def test_startup_schema_adopts_legacy_sqlite_without_data_loss(tmp_path: Path) -
             ).scalar_one()
             integrity = connection.execute(text('PRAGMA integrity_check')).scalar_one()
         assert count == 1
-        assert revision == '0007_security_daily_metrics'
+        assert revision == '0008_watchlist_buyback_alerts'
         assert integrity == 'ok'
     finally:
         engine.dispose()

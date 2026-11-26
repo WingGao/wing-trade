@@ -40,15 +40,34 @@ class SecurityRead(APIModel):
 
 
 class WatchlistItemCreate(APIModel):
+    """新增或幂等更新关注证券请求模型。"""
+
     security_id: str
     sort_order: int = 0
     account_id: str | None = None
+    target_buy_price: Decimal | None = None
+    alert_enabled: bool = False
+    note: str | None = Field(default=None, max_length=256)
+
+
+class WatchlistItemUpdate(APIModel):
+    """局部更新关注证券目标买回价、提醒开关与备注请求模型。"""
+
+    sort_order: int | None = None
+    target_buy_price: Decimal | None = None
+    alert_enabled: bool | None = None
+    note: str | None = Field(default=None, max_length=256)
 
 
 class WatchlistItemRead(APIModel):
+    """关注证券基础响应模型。"""
+
     id: str
     account_id: str
     security_id: str
     sort_order: int
+    target_buy_price: Decimal | None = None
+    alert_enabled: bool = False
+    note: str | None = None
     security: SecurityRead | None = None
 

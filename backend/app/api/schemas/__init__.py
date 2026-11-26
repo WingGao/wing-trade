@@ -9,7 +9,13 @@ from .dashboard import (
     QuoteRead,
 )
 from .position import CycleRead, LotRead, PositionRead, TradeMatchRead
-from .security import SecurityCreate, SecurityRead, WatchlistItemCreate, WatchlistItemRead
+from .security import (
+    SecurityCreate,
+    SecurityRead,
+    WatchlistItemCreate,
+    WatchlistItemRead,
+    WatchlistItemUpdate,
+)
 from .target import ProfitTargetCreate, ProfitTargetPatch, ProfitTargetRead
 from .trade import (
     BuyTradeRequest,
@@ -45,5 +51,6 @@ __all__ = [
     "VoidTradeRequest",
     "WatchlistItemCreate",
     "WatchlistItemRead",
+    "WatchlistItemUpdate",
 ]
 
