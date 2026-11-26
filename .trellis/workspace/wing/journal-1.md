@@ -646,3 +646,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 27: 持仓批次表格列合并与快捷卖出
+<!-- trellis-session: v=2 fp=bf119290f0bb82a1 -->
+
+**Date**: 2026-11-26
+**Task**: 持仓批次表格列合并与快捷卖出
+**Branch**: `master`
+
+### Summary
+
+合并持仓批次桌面端列为一列多行展示（股数/单位成本、成本/现值、浮盈/止盈目标及纵向操作列），并新增批次快捷卖出按钮自动预填剩余股数/份额到卖出弹窗；同步更新前端契约文档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fec2835` | feat(frontend): 合并持仓批次表格列并新增批次快捷卖出预填 |
+
+### Status
+
+[OK] **Completed**
