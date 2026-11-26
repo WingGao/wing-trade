@@ -17,7 +17,7 @@ import {
 } from '../utils/format'
 import { isPositionRefreshing } from '../utils/recalculate'
 
-export type PositionFilterTab = 'all' | 'lowestProfit' | 'belowLastSell' | 'loss'
+export type PositionFilterTab = 'all' | 'watchlist' | 'lowestProfit' | 'belowLastSell' | 'loss'
 export type PositionSortField = 'marketValue' | 'unrealizedPnl' | 'changePct' | 'lowestReturnPct' | 'vsLastSellPct'
 export type PositionSortOrder = 'descending' | 'ascending'
 
@@ -66,8 +66,9 @@ function rowScope(position: DashboardPosition): PositionRefreshScope {
   }
 }
 
-/** 计算持仓当前展示总市值（数值），缺失有效行情时返回空值。 */
+/** 计算持仓当前展示总市值（数值），空仓关注行或缺失有效行情时返回空值。 */
 function positionMarketValueNum(position: DashboardPosition): number | null {
+  if (position.isWatchlistOnly) return null
   const price = position.quote?.lastPrice
   if (price === null || price === undefined || price === '') return null
   const qty = Number(position.remainingQty)
@@ -96,10 +97,13 @@ function isLowestProfit(position: DashboardPosition): boolean {
   return pnl !== null && pnl > 0
 }
 
-/** 判断持仓是否命中“低于上卖”筛选条件（有效现价低于上次卖出价）。 */
+/** 判断持仓是否命中“低于上卖”筛选条件（有效现价低于上次卖出价，且上次卖出价低于低批买入价）。 */
 function isBelowLastSell(position: DashboardPosition): boolean {
   const diffPct = parseFiniteNumber(position.vsLastSellPct)
-  return diffPct !== null && diffPct < 0
+  if (diffPct === null || diffPct >= 0) return false
+  const lastSellPrice = parseFiniteNumber(position.lastSellPrice)
+  const lowestPurchasePrice = parseFiniteNumber(position.lowestPriceGroup?.purchasePrice)
+  return lastSellPrice !== null && lowestPurchasePrice !== null && lastSellPrice < lowestPurchasePrice
 }
 
 /** 判断持仓是否命中“浮亏仓位”筛选条件。 */
@@ -110,16 +114,19 @@ function isLossPosition(position: DashboardPosition): boolean {
 
 /** 计算四个筛选标签的数量角标，始终基于账户全量活动持仓。 */
 const filterCounts = computed(() => {
+  let watchlist = 0
   let lowestProfit = 0
   let belowLastSell = 0
   let loss = 0
   for (const pos of props.positions) {
+    if (pos.isWatchlist) watchlist += 1
     if (isLowestProfit(pos)) lowestProfit += 1
     if (isBelowLastSell(pos)) belowLastSell += 1
     if (isLossPosition(pos)) loss += 1
   }
   return {
     all: props.positions.length,
+    watchlist,
     lowestProfit,
     belowLastSell,
     loss,
@@ -167,6 +174,7 @@ function toggleCompactMode(): void {
 const visiblePositions = computed(() => {
   const q = keyword.value.trim().toLowerCase()
   const filtered = props.positions.filter((pos) => {
+    if (filterTab.value === 'watchlist' && !pos.isWatchlist) return false
     if (filterTab.value === 'lowestProfit' && !isLowestProfit(pos)) return false
     if (filterTab.value === 'belowLastSell' && !isBelowLastSell(pos)) return false
     if (filterTab.value === 'loss' && !isLossPosition(pos)) return false
@@ -269,6 +277,16 @@ defineExpose({
           @click="filterTab = 'all'"
         >
           全部 <span class="ap-tab-count num">{{ filterCounts.all }}</span>
+        </button>
+        <button
+          v-if="filterCounts.watchlist > 0"
+          type="button"
+          role="tab"
+          :aria-selected="filterTab === 'watchlist'"
+          :class="['ap-filter-tab', { 'is-active': filterTab === 'watchlist' }]"
+          @click="filterTab = 'watchlist'"
+        >
+          ★ 关注 <span class="ap-tab-count num">{{ filterCounts.watchlist }}</span>
         </button>
         <button
           type="button"
@@ -378,42 +396,77 @@ defineExpose({
       <article
         v-for="row in visiblePositions"
         :key="rowKey(row)"
-        :class="['ap-row', { 'is-active': activeKey === rowKey(row) }]"
+        :class="['ap-row', { 'is-active': activeKey === rowKey(row), 'is-watchlist-only': row.isWatchlistOnly, 'is-buy-hit': row.hitBuyTarget }]"
         @click="handleSelect(row)"
       >
         <div class="ap-row-grid">
           <div class="ap-col-sec">
-            <a class="ap-code-link" href="#" @click.prevent.stop="handleSelect(row)">
-              {{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}
-            </a>
+            <div class="ap-code-line">
+              <a class="ap-code-link" href="#" @click.prevent.stop="handleSelect(row)">
+                {{ row.market ? `${row.market}:${row.symbol}` : row.securityId }}
+              </a>
+              <span v-if="row.isWatchlist" class="ap-watch-star" :title="row.watchlistNote || '已关注'">★</span>
+              <span v-if="row.isWatchlistOnly" class="ap-watch-badge">空仓关注</span>
+              <span v-if="row.hitBuyTarget" class="ap-hit-badge">到买回价</span>
+            </div>
             <div v-if="row.name" class="ap-sec-name" :title="row.name">{{ row.name }}</div>
-            <div class="ap-sec-holding num">
+            <div v-if="row.isWatchlistOnly" class="ap-sec-holding num">
+              <template v-if="row.targetBuyPrice">
+                买回 {{ formatCompactMoney(row.targetBuyPrice, row.currency ?? currency, priceDigits(row, 2)) }}
+                <span v-if="row.alertEnabled" class="ap-alert-dot" title="已开启企微到价提醒">🔔</span>
+              </template>
+              <span v-else class="ap-muted">未设买回价</span>
+            </div>
+            <div v-else class="ap-sec-holding num">
               {{ formatQuantity(row.remainingQty, row) }}{{ quantityUnit(row) }} · 均 {{ formatCompactMoney(row.averageCost, row.currency ?? currency, priceDigits(row, 2)) }}
+              <template v-if="row.isWatchlist && row.targetBuyPrice">
+                · 买回 {{ formatCompactMoney(row.targetBuyPrice, row.currency ?? currency, priceDigits(row, 2)) }}
+              </template>
             </div>
           </div>
 
           <div class="ap-col-val num">
-            <div class="ap-mv">
-              {{ formatCompactMoney(positionMarketValueText(row), row.currency ?? currency, 2) }}
-            </div>
-            <div class="ap-pnl-line">
-              <span :class="['ap-pnl-amt', trendClass(row.unrealizedPnl)]">
-                {{ formatSignedMoney(row.unrealizedPnl, row.currency ?? currency, 2) }}
-              </span>
-              <span :class="['ap-pnl-pct', trendClass(row.unrealizedReturnPct)]">
-                {{ formatSignedPercent(row.unrealizedReturnPct) }}
-              </span>
-            </div>
-            <div class="ap-lowest-line">
-              <template v-if="row.lowestPriceGroup">
-                <span class="ap-lowest-meta">低批 {{ formatQuantity(row.lowestPriceGroup.remainingQty, row) }}{{ quantityUnit(row) }}</span>
-                <span class="ap-lowest-dot">·</span>
-                <span :class="['ap-lowest-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">
-                  {{ formatSignedMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? currency, 2) }}
+            <template v-if="row.isWatchlistOnly">
+              <div class="ap-mv">
+                {{ row.targetBuyPrice ? `买回 ${formatCompactMoney(row.targetBuyPrice, row.currency ?? currency, priceDigits(row, 2))}` : '关注跟踪中' }}
+              </div>
+              <div class="ap-pnl-line">
+                <span v-if="row.targetBuyPrice" :class="['ap-pnl-pct', row.hitBuyTarget ? 'ap-hit-text' : trendClass(row.vsTargetBuyPct)]">
+                  距买回 {{ formatSignedPercent(row.vsTargetBuyPct) }}
                 </span>
-              </template>
-              <span v-else class="ap-muted">无低批</span>
-            </div>
+                <span v-else class="ap-muted">可点详情设买回价</span>
+              </div>
+              <div class="ap-lowest-line">
+                <span class="ap-lowest-meta">历史已实现</span>
+                <span class="ap-lowest-dot">·</span>
+                <span :class="['ap-lowest-pnl', trendClass(row.realizedPnl)]">
+                  {{ formatSignedMoney(row.realizedPnl, row.currency ?? currency, 2) }}
+                </span>
+              </div>
+            </template>
+            <template v-else>
+              <div class="ap-mv">
+                {{ formatCompactMoney(positionMarketValueText(row), row.currency ?? currency, 2) }}
+              </div>
+              <div class="ap-pnl-line">
+                <span :class="['ap-pnl-amt', trendClass(row.unrealizedPnl)]">
+                  {{ formatSignedMoney(row.unrealizedPnl, row.currency ?? currency, 2) }}
+                </span>
+                <span :class="['ap-pnl-pct', trendClass(row.unrealizedReturnPct)]">
+                  {{ formatSignedPercent(row.unrealizedReturnPct) }}
+                </span>
+              </div>
+              <div class="ap-lowest-line">
+                <template v-if="row.lowestPriceGroup">
+                  <span class="ap-lowest-meta">低批 {{ formatQuantity(row.lowestPriceGroup.remainingQty, row) }}{{ quantityUnit(row) }}</span>
+                  <span class="ap-lowest-dot">·</span>
+                  <span :class="['ap-lowest-pnl', trendClass(row.lowestPriceGroup.unrealizedPnl)]">
+                    {{ formatSignedMoney(row.lowestPriceGroup.unrealizedPnl, row.currency ?? currency, 2) }}
+                  </span>
+                </template>
+                <span v-else class="ap-muted">无低批</span>
+              </div>
+            </template>
           </div>
 
           <div class="ap-col-prices num">
@@ -511,6 +564,61 @@ defineExpose({
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 4px 18px #1822300b;
+}
+
+.ap-code-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ap-watch-star {
+  color: #eab308;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ap-watch-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  height: 17px;
+  border-radius: 4px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ap-hit-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  height: 17px;
+  border-radius: 4px;
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ap-hit-text {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.ap-alert-dot {
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.ap-row.is-watchlist-only {
+  background: #fafcff;
+}
+
+.ap-row.is-buy-hit {
+  border-left: 3px solid #ef4444;
 }
 
 .ap-head {

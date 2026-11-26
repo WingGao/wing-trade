@@ -141,6 +141,7 @@ export interface Lot {
   remainingQty: string
   remainingCost: string
   unitCost: string
+  purchasePrice?: string | null
   executedAt: string
   status: string
   targets?: ProfitTarget[]
@@ -287,6 +288,60 @@ export interface DashboardPosition extends Position {
   avgAmplitudeDays?: number | null
   avgAmplitudeAsOf?: string | null
   needsRefresh?: boolean
+  /** 前端视图层混入关注信息时的扩展元数据。 */
+  isWatchlist?: boolean
+  isWatchlistOnly?: boolean
+  targetBuyPrice?: string | null
+  alertEnabled?: boolean
+  watchlistNote?: string | null
+  vsTargetBuyPct?: string | null
+  hitBuyTarget?: boolean
+}
+
+export interface WatchlistItem {
+  id: string
+  accountId: string
+  securityId: string
+  strategyId: string
+  market: string
+  symbol: string
+  name?: string | null
+  securityType?: string | null
+  currency?: Currency | null
+  sortOrder: number
+  targetBuyPrice?: string | null
+  alertEnabled: boolean
+  note?: string | null
+  hasOpenPosition: boolean
+  realizedPnl: string
+  lastSellPrice?: string | null
+  lastSellExecutedAt?: string | null
+  vsLastSellPct?: string | null
+  vsTargetBuyPct?: string | null
+  hitBuyTarget: boolean
+  avgAmplitude20d?: string | null
+  avgAmplitudeDays?: number | null
+  avgAmplitudeAsOf?: string | null
+  quote: Quote | null
+  security?: Security | null
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface WatchlistUpsertPayload {
+  securityId: string
+  accountId?: string
+  sortOrder?: number
+  targetBuyPrice?: string | null
+  alertEnabled?: boolean
+  note?: string | null
+}
+
+export interface WatchlistUpdatePayload {
+  sortOrder?: number
+  targetBuyPrice?: string | null
+  alertEnabled?: boolean
+  note?: string | null
 }
 
 export interface DashboardSummary extends AnalyticsSummary {

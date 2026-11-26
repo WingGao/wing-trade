@@ -7,6 +7,11 @@ import { useAccountsStore } from '../stores/accounts'
 import { useLedgerStore } from '../stores/ledger'
 import { usePreferencesStore } from '../stores/preferences'
 import { useQuotesStore } from '../stores/quotes'
+import {
+  mergePositionsWithWatchlist,
+  projectWatchlistWithQuotes,
+  useWatchlistStore,
+} from '../stores/watchlist'
 import { api } from '../api/client'
 import ActivePositionList from '../components/ActivePositionList.vue'
 import SecurityDetailPanel from '../components/SecurityDetailPanel.vue'
@@ -24,12 +29,22 @@ const accountsStore = useAccountsStore()
 const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
 const quotesStore = useQuotesStore()
+const watchlistStore = useWatchlistStore()
 const router = useRouter()
 const { isMobile } = useViewport()
 const dashboard = computed(() =>
   ledger.dashboard ? projectDashboardWithQuotes(ledger.dashboard, quotesStore.quotesMap) : null,
 )
-const positions = computed(() => dashboard.value?.positions ?? [])
+const projectedWatchlist = computed(() =>
+  projectWatchlistWithQuotes(watchlistStore.items, quotesStore.quotesMap),
+)
+const positions = computed(() =>
+  mergePositionsWithWatchlist(
+    dashboard.value?.positions ?? [],
+    projectedWatchlist.value,
+    preferences.showWatchlist,
+  ),
+)
 const selectedPositionKey = ref<string | null>(null)
 const streamStatusText = computed(() => {
   if (quotesStore.connectionState === 'live') return '实时推送中'
@@ -233,12 +248,16 @@ async function loadValuation(mode: DashboardMode, reportSuccess = false, schedul
   if (mutationActive.value && !afterWrite) return null
   const requestId = ++responseGeneration
   clearPollTimer()
-  const result = await ledger.loadDashboard({
-    accountId: accountsStore.activeAccountId || dashboard.value?.accountId,
-    includeClosed: preferences.includeClosed,
-    mode,
-    reuse: mode === 'auto' && !afterWrite,
-  })
+  const targetAccountId = accountsStore.activeAccountId || dashboard.value?.accountId
+  const [result] = await Promise.all([
+    ledger.loadDashboard({
+      accountId: targetAccountId,
+      includeClosed: preferences.includeClosed,
+      mode,
+      reuse: mode === 'auto' && !afterWrite,
+    }),
+    watchlistStore.load(targetAccountId),
+  ])
   if (!pageAlive.value || requestId !== responseGeneration) return null
   if (scheduleNext) schedulePoll(result?.pollAfterSeconds)
   if (reportSuccess && result) ElMessage.success(mode === 'manual' ? '估值与行情刷新完成' : '首页数据已更新')
@@ -355,13 +374,14 @@ async function reloadQuickTrade() {
 /** 根据持仓内置证券标识打开独立个股详情页，不再依赖独立行情状态。 */
 async function openPosition(position: DashboardPosition) {
   const account = dashboard.value?.accountId
+  const realStrategyId = position.strategyId?.startsWith('watchlist:') ? undefined : position.strategyId
   if (position.market && position.symbol) {
-    router.push({ path: `/security/${position.market}/${position.symbol}`, query: { accountId: account, strategyId: position.strategyId } })
+    router.push({ path: `/security/${position.market}/${position.symbol}`, query: { accountId: account, strategyId: realStrategyId } })
     return
   }
   const securities = await api.securities()
   const security = securities.find((item) => item.id === position.securityId)
-  if (security && pageAlive.value && account === dashboard.value?.accountId) router.push({ path: `/security/${security.market}/${security.symbol}`, query: { accountId: account, strategyId: position.strategyId } })
+  if (security && pageAlive.value && account === dashboard.value?.accountId) router.push({ path: `/security/${security.market}/${security.symbol}`, query: { accountId: account, strategyId: realStrategyId } })
   else ElMessage.warning('找不到证券基础信息')
 }
 
@@ -452,6 +472,7 @@ onBeforeUnmount(() => {
         <el-tag :type="statusTagType(valuationStatus)">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
         <el-button @click="globalTargetVisible = true">全局止盈设置</el-button>
         <el-button @click="notificationSettingVisible = true">推送设置</el-button>
+        <el-switch v-model="preferences.showWatchlist" active-text="显示关注" />
         <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
         <el-button type="primary" :loading="manualRefreshing" :disabled="mutationActive" @click="refresh">刷新行情</el-button>
       </div>
@@ -520,7 +541,7 @@ onBeforeUnmount(() => {
           :market="activeDetailPosition.market"
           :symbol="activeDetailPosition.symbol"
           :account-id="dashboard?.accountId"
-          :strategy-id="activeDetailPosition.strategyId"
+          :strategy-id="activeDetailPosition.strategyId?.startsWith('watchlist:') ? undefined : activeDetailPosition.strategyId"
           embedded
           @mutated="reloadQuickTrade"
           @open-standalone="openPosition(activeDetailPosition)"
@@ -548,6 +569,7 @@ onBeforeUnmount(() => {
       <div class="m-dash-toolbar">
         <el-tag :type="statusTagType(valuationStatus)" size="small">{{ valuationStatusLabel(valuationStatus) }}</el-tag>
         <div class="m-dash-actions">
+          <el-switch v-model="preferences.showWatchlist" size="small" active-text="关注" />
           <el-switch v-model="preferences.includeClosed" size="small" active-text="已结清" />
           <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
           <el-button size="small" @click="notificationSettingVisible = true">推送</el-button>

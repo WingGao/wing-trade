@@ -21,12 +21,14 @@ import SellMatchDrawer from './SellMatchDrawer.vue'
 import ProfitTargetDialog from './ProfitTargetDialog.vue'
 import ProfitSettingDialog from './ProfitSettingDialog.vue'
 import FundProxyDialog from './FundProxyDialog.vue'
+import WatchlistSettingDialog from './WatchlistSettingDialog.vue'
 import IntradayChart from './IntradayChart.vue'
 import QuoteBadge from './QuoteBadge.vue'
 import { useAccountsStore } from '../stores/accounts'
 import { usePreferencesStore } from '../stores/preferences'
 import { useLedgerStore } from '../stores/ledger'
 import { useQuotesStore } from '../stores/quotes'
+import { useWatchlistStore } from '../stores/watchlist'
 import {
   formatDateTime,
   formatMoney,
@@ -67,6 +69,7 @@ const accountsStore = useAccountsStore()
 const preferences = usePreferencesStore()
 const ledger = useLedgerStore()
 const quotesStore = useQuotesStore()
+const watchlistStore = useWatchlistStore()
 const { isMobile } = useViewport()
 
 const security = ref<Security | null>(null)
@@ -92,6 +95,8 @@ const targetVisible = ref(false)
 const globalTargetVisible = ref(false)
 const securityTargetVisible = ref(false)
 const proxyDialogVisible = ref(false)
+const watchlistDialogVisible = ref(false)
+const togglingWatch = ref(false)
 const fundSeriesMode = ref<'auto' | 'nav'>('auto')
 const mobileActionsOpen = ref(false)
 const mobileChartOpen = ref(false)
@@ -438,9 +443,9 @@ function openSellDrawer(initialQty = ''): void {
   sellVisible.value = true
 }
 
-/** 点击持仓批次的卖出按钮，将该批次剩余数量带入卖出弹窗。 */
-function sellLot(lot: Lot): void {
-  openSellDrawer(lot.remainingQty)
+/** 点击持仓批次的卖出按钮，将该批次或合并组的剩余数量带入卖出弹窗。 */
+function sellLot(remainingQty: string): void {
+  openSellDrawer(remainingQty)
 }
 
 /** 跟踪参考标的保存或解绑后，立即刷新详情页行情、估算分时与批次浮盈。 */
@@ -473,6 +478,47 @@ watch(() => quotesStore.connectionState, (state) => {
   else if (state === 'offline') schedulePoll()
 })
 
+const currentWatchlistItem = computed(() => watchlistStore.findBySecurityId(security.value?.id) ?? null)
+const watchButtonLabel = computed(() => {
+  const item = currentWatchlistItem.value
+  if (!item) return '☆ 关注'
+  if (item.targetBuyPrice) {
+    return `★ 买回 ${formatMoney(item.targetBuyPrice, currency.value, priceDigits(isFund.value, 2))}`
+  }
+  return '★ 已关注'
+})
+
+/** 未关注时一键加入关注，已关注时打开买回价与提醒配置弹窗。 */
+async function handleWatchAction(): Promise<void> {
+  if (!security.value || !accountId.value || togglingWatch.value) return
+  if (currentWatchlistItem.value) {
+    watchlistDialogVisible.value = true
+    return
+  }
+  togglingWatch.value = true
+  try {
+    await watchlistStore.add(
+      { securityId: security.value.id, accountId: accountId.value },
+      accountId.value,
+    )
+    ElMessage.success('已加入关注，可再次点击设置目标买回价')
+  } catch (cause) {
+    ElMessage.error(cause instanceof Error ? cause.message : '加入关注失败')
+  } finally {
+    togglingWatch.value = false
+  }
+}
+
+watch(
+  accountId,
+  (acc) => {
+    if (acc && watchlistStore.accountId !== acc) {
+      void watchlistStore.load(acc)
+    }
+  },
+  { immediate: true },
+)
+
 watch(
   () => [props.market, props.symbol, props.accountId, props.strategyId],
   () => {
@@ -492,6 +538,9 @@ watch(
         lots.value = []
         holdingSummary.value = null
         needsRefresh.value = false
+        if (account && watchlistStore.accountId !== account) {
+          void watchlistStore.load(account)
+        }
       }
       if (!mutationActive.value) void reloadLots()
       if (accountChanged && !props.embedded) {
@@ -549,6 +598,16 @@ onBeforeUnmount(() => {
             {{ hasProxyBinding ? '修改跟踪标的' : '绑定跟踪标的' }}
           </el-button>
           <el-button v-if="!embedded" @click="globalTargetVisible = true">全局止盈设置</el-button>
+          <el-button
+            :size="embedded ? 'small' : 'default'"
+            :type="currentWatchlistItem?.hitBuyTarget ? 'danger' : currentWatchlistItem ? 'warning' : 'default'"
+            :plain="!currentWatchlistItem?.hitBuyTarget"
+            :loading="togglingWatch"
+            :disabled="!security || !accountId"
+            @click="handleWatchAction"
+          >
+            {{ watchButtonLabel }}
+          </el-button>
           <el-button :size="embedded ? 'small' : 'default'" :disabled="!security" @click="securityTargetVisible = true">个股止盈设置</el-button>
           <el-button :size="embedded ? 'small' : 'default'" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
           <el-button :size="embedded ? 'small' : 'default'" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="openSellDrawer()">卖出配对</el-button>
@@ -606,6 +665,7 @@ onBeforeUnmount(() => {
           <div class="panel-title lot-heading">
             <span>持仓批次 <span class="muted">已结清 {{ closedLotCount }} 批</span></span>
             <div class="toolbar">
+              <el-switch v-model="preferences.mergeLotsByPrice" active-text="按买入价合并" />
               <el-switch v-model="preferences.includeClosed" active-text="显示已结清" />
               <el-button :disabled="!security || !accountId" :loading="rebuilding" @click="recalculate">重新计算</el-button>
             </div>
@@ -653,7 +713,7 @@ onBeforeUnmount(() => {
           </div>
         </dl>
         <div v-loading="loading || rebuilding">
-          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" @sell="sellLot" />
+          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :merge-by-price="preferences.mergeLotsByPrice" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" @sell="sellLot" />
         </div>
         <section v-if="preferences.includeClosed" class="settled-trade-section">
           <h3 class="panel-title">已结清买卖明细</h3>
@@ -683,6 +743,16 @@ onBeforeUnmount(() => {
           </el-select>
           <el-button size="small" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
           <el-button size="small" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="openSellDrawer()">卖出配对</el-button>
+          <el-button
+            size="small"
+            :type="currentWatchlistItem?.hitBuyTarget ? 'danger' : currentWatchlistItem ? 'warning' : 'default'"
+            :plain="!currentWatchlistItem?.hitBuyTarget"
+            :loading="togglingWatch"
+            :disabled="!security || !accountId"
+            @click="handleWatchAction"
+          >
+            {{ watchButtonLabel }}
+          </el-button>
           <el-button v-if="isFund" size="small" :disabled="!security" @click="proxyDialogVisible = true">{{ hasProxyBinding ? '修改跟踪' : '绑定跟踪' }}</el-button>
           <el-button size="small" :disabled="!security" @click="securityTargetVisible = true">个股止盈</el-button>
           <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
@@ -714,6 +784,7 @@ onBeforeUnmount(() => {
         <div class="m-section-head">
           <span>持仓批次 <span class="m-section-sub">已结清 {{ closedLotCount }} 批</span></span>
           <div class="m-lot-tools">
+            <el-switch v-model="preferences.mergeLotsByPrice" size="small" active-text="按价合并" />
             <el-switch v-model="preferences.includeClosed" size="small" active-text="已结清" />
             <el-button size="small" :disabled="!security || !accountId" :loading="rebuilding" @click="recalculate">重算</el-button>
           </div>
@@ -753,7 +824,7 @@ onBeforeUnmount(() => {
           </div>
         </dl>
         <div v-loading="loading || rebuilding">
-          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" @sell="sellLot" />
+          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :merge-by-price="preferences.mergeLotsByPrice" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" @sell="sellLot" />
         </div>
       </section>
 
@@ -770,6 +841,19 @@ onBeforeUnmount(() => {
     <ProfitSettingDialog v-model="globalTargetVisible" @saved="reloadLots(true)" />
     <ProfitSettingDialog v-if="security" v-model="securityTargetVisible" :security-id="security.id" @saved="reloadLots(true)" />
     <FundProxyDialog v-if="security && isFund" v-model="proxyDialogVisible" :security="security" @saved="handleProxySaved" />
+    <WatchlistSettingDialog
+      v-if="security"
+      v-model="watchlistDialogVisible"
+      :security-id="security.id"
+      :account-id="accountId"
+      :symbol-label="`${security.market}:${security.symbol}`"
+      :security-name="security.name"
+      :currency="currency"
+      :is-fund="isFund"
+      :existing="currentWatchlistItem"
+      :last-sell-price="displayHoldingSummary?.lastSellPrice ?? currentWatchlistItem?.lastSellPrice"
+      :current-price="currentQuote?.lastPrice"
+    />
   </div>
 </template>
 

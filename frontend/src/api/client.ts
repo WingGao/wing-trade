@@ -1,4 +1,4 @@
-import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead, WeComNotificationSetting, WeComNotificationTestResult, WeComNotificationUpdate } from './types'
+import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead, WatchlistItem, WatchlistUpdatePayload, WatchlistUpsertPayload, WeComNotificationSetting, WeComNotificationTestResult, WeComNotificationUpdate } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
@@ -91,4 +91,12 @@ export const api = {
   saveWecomNotification: (payload: WeComNotificationUpdate) => request<WeComNotificationSetting>('/notifications/wecom', { method: 'PUT', body: JSON.stringify(payload) }),
   /** 发送一条企业微信测试消息以验证 Webhook 连通性。 */
   testWecomNotification: (webhookUrl?: string) => request<WeComNotificationTestResult>('/notifications/wecom/test', { method: 'POST', body: JSON.stringify(webhookUrl ? { webhookUrl } : {}) }),
+  /** 读取当前账户的关注证券列表（独立于首页估值接口）。 */
+  watchlist: (accountId?: string) => request<WatchlistItem[]>(`/watchlist?${query({ accountId })}`),
+  /** 新增或幂等更新关注证券及目标买回价配置。 */
+  addWatchlist: (payload: WatchlistUpsertPayload, accountId?: string) => request<WatchlistItem>(`/watchlist?${query({ accountId })}`, { method: 'POST', body: JSON.stringify(payload) }),
+  /** 局部更新关注证券的目标买回价、企微提醒开关与备注。 */
+  updateWatchlist: (securityId: string, payload: WatchlistUpdatePayload, accountId?: string) => request<WatchlistItem>(`/watchlist/${securityId}?${query({ accountId })}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  /** 取消关注指定证券。 */
+  removeWatchlist: (securityId: string, accountId?: string) => request<void>(`/watchlist/${securityId}?${query({ accountId })}`, { method: 'DELETE' }),
 }

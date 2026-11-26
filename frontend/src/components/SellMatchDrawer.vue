@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api/client'
 import type { Currency, Lot, SellPreview } from '../api/types'
+import { useWatchlistStore } from '../stores/watchlist'
 import { formatDateTime, formatMoney, formatQuantity, priceDigits, quantityUnit, trendClass } from '../utils/format'
 import { nowBeijingPickerValue, toAwareBeijingIso } from '../utils/time'
 import { useViewport } from '../utils/viewport'
@@ -21,15 +22,41 @@ interface PreviewInput {
 const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string; currency?: Currency; isFund?: boolean; initialQty?: string }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
+const watchlistStore = useWatchlistStore()
 const { isMobile } = useViewport()
 const isUS = computed(() => props.currency === 'USD')
 const allowDecimalQty = computed(() => Boolean(props.isFund) || isUS.value)
 const form = reactive({ qty: '', price: '', executedAt: nowBeijingPickerValue(), commission: '', otherFee: '' })
+const watchAfterClear = ref(false)
+const watchTargetBuyPrice = ref('')
+const watchAlertEnabled = ref(false)
 const preview = ref<SellPreview | null>(null)
 const previewInput = ref<PreviewInput | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
 let previewGeneration = 0
+
+/** 计算当前证券可卖出的未结清总数量。 */
+const totalAvailableQty = computed(() =>
+  props.lots
+    .filter((lot) => lot.status === 'OPEN')
+    .reduce((sum, lot) => sum + (Number(lot.remainingQty) || 0), 0),
+)
+
+/** 判断本次预览是否将清空全部持仓且该证券当前尚未关注。 */
+const showClearWatchOption = computed(() => {
+  if (!preview.value || totalAvailableQty.value <= 0) return false
+  if (watchlistStore.findBySecurityId(props.securityId)) return false
+  const previewQty = Number(preview.value.qty)
+  return Number.isFinite(previewQty) && previewQty >= totalAvailableQty.value - 1e-6
+})
+
+const hasValidWatchPrice = computed(() => {
+  const raw = watchTargetBuyPrice.value.trim()
+  if (!raw) return false
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0
+})
 
 /** 将表单时间安全转换为带 +08:00 时区的北京时间 ISO 字符串。 */
 function executedAtIso(): string {
@@ -83,6 +110,9 @@ watch(() => [props.accountId, props.securityId, form.qty, form.price, form.execu
 watch(visible, (open) => {
   if (open) {
     form.executedAt = nowBeijingPickerValue()
+    watchAfterClear.value = false
+    watchTargetBuyPrice.value = ''
+    watchAlertEnabled.value = false
     if (props.initialQty !== undefined) {
       form.qty = normalizeQtyInput(props.initialQty)
     }
@@ -90,6 +120,12 @@ watch(visible, (open) => {
     invalidatePreview()
   }
 }, { immediate: true })
+
+watch(watchTargetBuyPrice, (next) => {
+  if (!next.trim() && watchAlertEnabled.value) {
+    watchAlertEnabled.value = false
+  }
+})
 
 /** 请求最近买入优先且跨批次等量分配的预览，并丢弃已过期响应。 */
 async function previewSell() {
@@ -143,7 +179,27 @@ async function submit() {
       clientRequestId: crypto.randomUUID(),
       matches: preview.value.matches.map((match) => ({ lotId: match.lotId, matchedQty: match.matchedQty })),
     })
-    ElMessage.success('卖出已记账')
+    if (showClearWatchOption.value && watchAfterClear.value) {
+      const rawPrice = watchTargetBuyPrice.value.trim()
+      try {
+        await watchlistStore.add(
+          {
+            securityId: previewInput.value.securityId,
+            accountId: previewInput.value.accountId,
+            targetBuyPrice: hasValidWatchPrice.value ? rawPrice : null,
+            alertEnabled: hasValidWatchPrice.value ? watchAlertEnabled.value : false,
+          },
+          previewInput.value.accountId,
+        )
+        ElMessage.success('卖出已记账，并已加入关注列表')
+      } catch (watchErr) {
+        ElMessage.warning(
+          `卖出已记账，但加入关注失败：${watchErr instanceof Error ? watchErr.message : '请稍后手动关注'}`,
+        )
+      }
+    } else {
+      ElMessage.success('卖出已记账')
+    }
     visible.value = false
     emit('saved')
   } catch (error) {
@@ -170,6 +226,25 @@ async function submit() {
         <div><span class="preview-label">预计净回款</span><strong class="num">{{ formatMoney(preview.cashIn, previewCurrency) }}</strong></div>
         <div><span class="preview-label">已实现收益</span><strong :class="['num', trendClass(preview.realizedPnl)]">{{ formatMoney(preview.realizedPnl, previewCurrency) }}</strong></div>
         <div><span class="preview-label">预览成交量</span><strong class="num">{{ formatQuantity(preview.qty, isFund) }}</strong></div>
+      </div>
+      <div v-if="showClearWatchOption" class="clear-watch-box">
+        <el-checkbox v-model="watchAfterClear">清仓后继续关注此标的</el-checkbox>
+        <div v-if="watchAfterClear" class="clear-watch-fields">
+          <el-input
+            v-model="watchTargetBuyPrice"
+            size="small"
+            inputmode="decimal"
+            clearable
+            :placeholder="isFund ? '可选：目标买回净值' : '可选：目标买回价'"
+            style="width: 180px"
+          />
+          <el-switch
+            v-model="watchAlertEnabled"
+            size="small"
+            :disabled="!hasValidWatchPrice"
+            active-text="企微到价提醒"
+          />
+        </div>
       </div>
       <el-table v-if="!isMobile" :data="preview.matches" row-key="lotId" size="small" class="match-table">
         <el-table-column label="买入时间" min-width="170">
@@ -230,6 +305,8 @@ async function submit() {
 .match-table { margin-top: 16px; }
 .lot-code { border-bottom: 1px dotted currentColor; cursor: help; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .preview-placeholder { padding: 28px 0; text-align: center; }
+.clear-watch-box { margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--el-border-color); border-radius: 6px; background: #fafcff; }
+.clear-watch-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px; }
 @media (max-width: 600px) {
   .preview-summary { gap: 12px 20px; }
   .preview-summary > div { min-width: 120px; }
