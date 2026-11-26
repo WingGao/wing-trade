@@ -19,7 +19,7 @@
 
 - 止盈 `targetReturnPct` 是小数率：`0.1` 表示10%；估值 `unrealizedReturnPct` 是百分数：`10` 表示10%。不可混用。
 - 设置 PUT 的 `targetReturnPct:null` 删除本层覆盖；GET 返回设置或 null。只对用户明确保存的覆盖持久化；取消的批次目标不占计划量且不阻止继承。
-- lot 新增 `unrealizedPnl`、`unrealizedReturnPct`、`effectiveTarget`；继承投影包含 `source=LOT|SECURITY|GLOBAL`、收益率、口径、估计价格和提醒开关。已结清批次浮盈和继承目标为空。
+- lot 新增 `purchasePrice`（原始买入成交价 `buy_trade.price`，6 位小数字符串，缺失时为 `null`，由 `list_lots` 通过 `selectinload(Lot.buy_trade)` 预加载，供前端按原始买入价合并同价批次而不受单笔手续费差异影响）、`unrealizedPnl`、`unrealizedReturnPct`、`effectiveTarget`；继承投影包含 `source=LOT|SECURITY|GLOBAL`、收益率、口径、估计价格和提醒开关。已结清批次浮盈和继承目标为空。
 - lots 响应的 `summary` 含 `remainingQty`、`remainingCost`、`realizedPnl`、`unrealizedPnl`，均为十进制字符串；仅 `unrealizedPnl` 可为 null。数量与成本只合计 `status=OPEN` 且 `remainingQty>0` 的批次，已实现收益统计同范围全部有效卖出匹配，总浮盈使用同一证券缓存价统一计算。`includeClosed` 只控制 `lots` 与 `closedTradeDetails`，不能改变 `summary`；无行情或无剩余批次时 `unrealizedPnl=null`，不能返回零兜底。
 - lots 响应有 `currency` 与 `quote`，顶层 `realizedPnl` 保持兼容，并与 `summary.realizedPnl` 同口径。Dashboard 的 `summary.marketValue` 与当前估值同源，缺价时为空，空仓为零。
 - 开启 `includeClosed` 时 lots 响应的 `closedTradeDetails` 返回同一账户/证券/策略内全部有效已结清批次的原始买入及每笔有效卖出配对，关闭时为空数组。每行含 `lotId`、`tradeId`、`side`、`executedAt`、`qty`、`originalTradeQty`、`price`、`cashAmount`、`realizedPnl`；时间UTC、时间倒序，数值十进制字符串。买入现金额是含费原始成本，买入收益为空；卖出数量是本批匹配量、现金额是本批分摊净回款、收益是该匹配已实现收益，`originalTradeQty` 只辅助注明原整笔量。不能把整笔卖出重复归到每个批次，也不能用含费单位成本反推原成交价。读取不写库，作废交易不作为有效成交返回。

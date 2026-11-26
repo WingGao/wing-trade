@@ -155,12 +155,12 @@ async function mockWorkspaceApi(page: Page) {
         marketSession: 'regular',
       },
       lowestPriceGroup: {
-        purchasePrice: '70.200000',
+        purchasePrice: '76.500000',
         lotCount: 1,
         remainingQty: '100.0000',
-        remainingCost: '7020.0000',
-        unrealizedPnl: '125.0000',
-        unrealizedReturnPct: '1.780627',
+        remainingCost: '7650.0000',
+        unrealizedPnl: '-505.0000',
+        unrealizedReturnPct: '-6.601307',
       },
       needsRefresh: false,
     },
@@ -289,14 +289,15 @@ test('PC 端活动仓位展示上次卖出价、筛选、五维正反排序并�
   await expect(detail).toContainText('SZ:300750 宁德时代')
   await expect(detail.locator('.holding-summary')).toContainText('¥ 264.500')
 
-  // 验证筛选标签数量角标与过滤
+  // 验证筛选标签数量角标与过滤（低于上卖需同时满足现价 < 上卖 且 上卖 < 低批：仅美的命中，宁德上卖 264.5 > 低批 242 不命中）
   await expect(page.getByRole('tab', { name: /全部\s*3/ })).toBeVisible()
-  await expect(page.getByRole('tab', { name: /低批盈利\s*3/ })).toBeVisible()
-  await expect(page.getByRole('tab', { name: /低于上卖\s*2/ })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /低批盈利\s*2/ })).toBeVisible()
+  await expect(page.getByRole('tab', { name: /低于上卖\s*1/ })).toBeVisible()
   await expect(page.getByRole('tab', { name: /浮亏仓位\s*1/ })).toBeVisible()
 
   await page.getByRole('tab', { name: /低于上卖/ }).click()
-  await expect(rows).toHaveCount(2)
+  await expect(rows).toHaveCount(1)
+  await expect(rows.first()).toContainText('美的集团')
   await page.getByRole('tab', { name: /浮亏仓位/ }).click()
   await expect(rows).toHaveCount(1)
   await expect(rows.first()).toContainText('美的集团')

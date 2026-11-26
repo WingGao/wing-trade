@@ -118,3 +118,61 @@ holdingSummary.value = result.summary
 - 通过 `projectLotsWithQuote(lots, holdingSummary, currentQuote)` 仅对 `status === 'OPEN'` 且有剩余数量的批次与总浮盈执行 `BigInt` 精确十进制实时派生，已结清批次与账务事实保持不变。
 - 通过 `mergeQuoteIntoIntraday(intraday, liveQuote)` 对非 `nav` 曲线按分钟桶替换末点或追加新点（迟到旧包不倒退曲线）。
 - 当 `quotesStore.isLive === true` 时关闭 3 秒 `intraday` 定时轮询并显示「实时推送」状态；SSE 不可用进入 `offline` 时平滑恢复 3 秒降级轮询。
+
+## 9. 持仓批次按买入价格合并契约
+
+### 9.1 适用范围
+
+适用于个股详情（独立页与 PC 首页右栏内嵌详情）的「持仓批次」列表（`SecurityDetailPanel.vue`、`LotTable.vue`、`utils/lotMerge.ts`、`stores/preferences.ts`），以及后端 `GET /api/v1/securities/{id}/lots` 返回的 `purchasePrice` 字段。
+
+### 9.2 签名
+
+- `usePreferencesStore().mergeLotsByPrice`：布尔偏好，默认 `true`，持久化于 `localStorage` 键 `wing-trade:mergeLotsByPrice`；提供 `toggleMergeLotsByPrice()`。
+- `buildLotDisplayRows(lots: Lot[], mergeByPrice: boolean): LotDisplayRow[]`、`resolveLotBuyPrice(lot: Lot): string`（位于 `frontend/src/utils/lotMerge.ts`）。
+- `LotTable.vue`：新增可选 prop `mergeByPrice?: boolean`（默认 `true`）；`sell` 事件改为发出 `remainingQty: string`（兼容单批与合并组总剩余数量），`setTarget` 仍仅针对具体单条 `Lot` 发出。
+- `SecurityDetailPanel.vue`：桌面端批次标题栏提供「按买入价合并」开关，移动端提供「按价合并」开关，透传 `:merge-by-price="preferences.mergeLotsByPrice"`。
+
+### 9.3 契约
+
+- **默认合并与分组键**：默认开启按买入价格合并；分组键为 `status + 规范化 6 位小数买入价`（优先使用后端返回的原始买入成交价 `lot.purchasePrice`，旧数据或缺失时回退 `lot.unitCost`）。`OPEN` 与 `CLOSED` 批次绝不混并。
+- **精确聚合口径**：合并行使用 `BigInt` 精确十进制累加 `originalQty`、`originalCost`、`remainingQty`、`remainingCost` 与 `unrealizedPnl`（任一子批缺浮盈时合并行浮盈为 `null`），并按 `ROUND_HALF_UP` 计算加权含费均价（持有中用 `remainingCost / remainingQty`，已结清用 `originalCost / originalQty`）与合并收益率；严禁使用 JS `Number` 浮点累加。
+- **单批无额外包装与排序**：分组内仅 1 笔批次时直接按原单批展示（`isMerged=false`，无合并标签与展开箭头）；组间及组内子批次均保持买入时间倒序（同时间按 `id` 倒序）。
+- **交互与展开**：
+  - 桌面端通过 `el-table` 树形行（`row-key="rowKey"`、`tree-props="{ children: 'children' }"`）展示合并组，点击「合并 N 批」标签、「明细」按钮或展开箭头可展开查看原始子批次并对其独立设置止盈或单独卖出。
+  - 移动端在卡片头部展示「合并 N 批 ▾/▴」按钮，点击在卡片内展开/收起子批次列表，且保持 390px 视口零横向溢出。
+  - 点击合并行「卖出」将合并组总剩余数量预填至 `SellMatchDrawer`；显式批次止盈仍绑定单条 `lotId`，合并行不伪造虚拟 `lotId`，当子批含显式止盈时提示「含 N 批独立设置（展开查看）」，无显式覆盖且上级来源与收益率一致时展示继承规则。
+
+### 9.4 校验与状态矩阵
+
+| 条件 | 界面行为 |
+|---|---|
+| 首次进入或未存储偏好 | `mergeLotsByPrice=true`，默认按买入价格合并 |
+| 两笔 `OPEN` 批次买入价相同、手续费不同（`unitCost` 不同） | 按 `purchasePrice` 合并为 1 行，展示买入价与加权含费均价 |
+| `OPEN` 与 `CLOSED` 批次买入价相同且开启「显示已结清」 | 按状态隔离，分别展示，不混并 |
+| 某买入价仅有 1 笔批次 | 按原单批行展示，保留短 ID 与「卖出 / 设置」按钮 |
+| 点击合并行「卖出」 | 卖出抽屉预填合并总 `remainingQty` |
+| 点击合并行「明细」/ 展开按钮 | 展开原始子批次，每条子批次可单独「卖出」或「设置」止盈 |
+| 关闭「按买入价合并」开关 | 恢复全部批次按时间倒序平铺展示，并持久化偏好 |
+
+### 9.5 正常、边界与错误示例
+
+- 正常：以 `10.000` 买入两笔（200 股含费均价 `10.025`、100 股含费均价 `10.050`），默认合并为 1 行（`合并 2 批`、剩 `300`、成本 `3,010.00`、买入价 `10.000`、含费均价 `10.033`）。
+- 边界：同价多笔持有中批次均继承全局 `15%` 但因手续费差异导致各自目标估计价略不同时，合并行展示继承来源与 `15.00%`，不误显示其中某一批的目标估计价。
+- 错误：直接按 `unitCost` 分组导致同价不同手续费的买入无法合并；或把 `OPEN` 与 `CLOSED` 批次合并导致数量和状态失真。
+
+### 9.6 必须测试
+
+- 单元测试 / 断言覆盖 `buildLotDisplayRows` 的同价合并（含不同 `unitCost`）、跨状态隔离、单批透传、`BigInt` 精度累加、继承目标冲突处理及关闭合并后的时间倒序平铺。
+- Playwright E2E（`frontend/e2e/lot_merge_by_price.spec.ts`）覆盖桌面端默认合并、合并行卖出预填总数量、展开子批次、显示已结清不混并、关闭开关平铺，以及移动端卡片展开与零横向溢出。
+
+### 9.7 错误与正确写法
+
+```ts
+// 错误：按含费单价 unitCost 分组并用 Number 浮点相加。
+// const key = lot.unitCost
+// const qty = group.reduce((s, l) => s + Number(l.remainingQty), 0)
+
+// 正确：按状态 + 原始买入价（缺失回退 unitCost）分组，并使用 BigInt 精确十进制累加。
+const buyPrice = resolveLotBuyPrice(lot)
+const groupKey = `${lot.status}|${buyPrice}`
+```

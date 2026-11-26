@@ -45,6 +45,7 @@ class LotRead(APIModel):
     remaining_qty: Decimal
     remaining_cost: Decimal
     unit_cost: Decimal
+    purchase_price: Decimal | None = None
     executed_at: datetime
     status: str
     targets: list[dict] = []

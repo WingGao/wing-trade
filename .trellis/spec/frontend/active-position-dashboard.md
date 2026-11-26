@@ -13,7 +13,10 @@
 ## 3. 契约
 
 - **双端统一三列布局**：左列为 `证券 / 持仓`（代码、名称、数量与加权均价），中列为 `总市值 / 浮盈`（总市值、总浮盈额与浮盈率、低批剩余数量与低批浮盈额），右列带左竖分割线并纵向对齐四行：`现价`（最新价 + 当日涨跌幅，悬停显示报价更新信息 tooltip）、`低批`（最低价批次买入价 + 相对涨跌幅）、`上卖`（上次卖出价 + 相对涨跌幅，无卖出显示 `暂无卖出` 与 `—`）、`20日振`（近 20 个已收盘交易日平均振幅，右对齐无符号中性色两位百分数，无数据或场外基金显示 `—`，悬停提示统计口径与截止日期）。
-- **筛选与搜索**：顶部提供 `全部 / 低批盈利 / 低于上卖 / 浮亏仓位` 四个带数量角标的筛选标签、本地 `代码 / 名称` 搜索框以及右上角 `紧凑` 视图切换按钮。
+- **筛选与搜索**：顶部提供 `全部 / 低批盈利 / 低于上卖 / 浮亏仓位` 四个带数量角标的筛选标签（角标始终基于账户全量活动持仓计算）、本地 `代码 / 名称` 搜索框以及右上角 `紧凑` 视图切换按钮：
+  - `低批盈利`：`lowestPriceGroup.unrealizedPnl > 0`；
+  - `低于上卖`：同时满足 `vsLastSellPct < 0`（有效现价低于上次卖出价）**且** `lastSellPrice < lowestPriceGroup.purchasePrice`（上次卖出价严格小于低批买入价），任一数值缺失或非有限数字均不命中；
+  - `浮亏仓位`：`unrealizedPnl < 0`。
 - **五维正反排序**：默认按「现价（当日涨跌幅 `quote.changePct`）」降序；表头「总市值」「浮盈」「现价」「低批」「上卖」5 个标题均可独立点击正反切换排序（无“取消排序”第三态，**表头不增加振幅排序**），任意排序维度与方向下缺失值始终排在末尾。
 - **PC 端主从联动**：PC 端首页右侧空余区域直接内嵌 `SecurityDetailPanel` 展示当前选中仓位的个股详情，默认选中当前排序第一只持仓；点击左侧仓位即时切换右侧详情，右侧写入操作完成后同步刷新左侧仓位快照。
 
@@ -28,12 +31,15 @@
 | 默认排序 | 按 `changePct` 降序 |
 | 点击列头 | 在升序和降序之间切换，不取消涨幅排序 |
 | 数据刷新 | 新快照仍沿用当前排序方向，不恢复后端原始顺序 |
+| `vsLastSellPct < 0` 且 `lastSellPrice < lowestPriceGroup.purchasePrice` | 命中“低于上卖”筛选条件并计入角标 |
+| `vsLastSellPct < 0` 但 `lastSellPrice >= lowestPriceGroup.purchasePrice`（或缺失任一价格） | 不命中“低于上卖”筛选条件 |
 
 ## 5. 正常、边界与错误示例
 
 - 正常：持仓 `600` 股、现价 `7.890`、涨幅 `+2.50%`，第一行显示总价值，第二行显示 `¥ 7.890  +2.50%  实时`。
 - 边界：涨幅为 `0` 的持仓仍属于有效值，应先于缺行情持仓；缺行情持仓始终最后。
 - 边界：总价值为 `0` 时显示 `¥ 0.00`，不能显示破折号；`lastPrice=null` 才显示不可用状态。
+- 边界：“低于上卖”需同时满足 `现价 < 上卖` 与 `上卖 < 低批`（例如现价 `71.45`、上卖 `75.80`、低批 `76.50` 命中；现价 `248.60`、上卖 `264.50`、低批 `242.00` 因上卖不小于低批不命中；`lastSellPrice === lowestPriceGroup.purchasePrice` 或缺低批/缺上卖均不命中）。
 - 错误：点击列头后出现第三种“取消排序”状态，导致刷新后顺序不稳定。
 - 错误：为了显示总价值把格式化后的金额字符串转换后回写持仓成本。
 
@@ -44,6 +50,7 @@
 - hover 状态标签后出现“报价更新信息”，并包含行情来源及报价/获取时间。
 - 使用至少三条持仓验证默认降序、点击列头升序，以及缺行情持仓在两种方向下均位于末尾。
 - 验证最低价批次第二行 DOM 文本为 `2批150股1,200.00`，视觉间距由 CSS 提供。
+- `active_positions_last_sell.spec.ts` 断言“低于上卖”筛选及角标同时校验 `vsLastSellPct < 0` 与 `lastSellPrice < lowestPriceGroup.purchasePrice`（覆盖命中项与仅 `现价 < 上卖` 但 `上卖 >= 低批` 的排除项）。
 - 运行 `pnpm run type-check`、相关 Playwright 用例和 `pnpm run build`。
 
 ## 7. 错误与正确写法
@@ -67,4 +74,23 @@ function positionChangeValue(position: DashboardPosition): number | null {
 
 <!-- 正确：传入总价值与紧凑模式，由 QuoteBadge 统一处理两行展示和 hover 提示。 -->
 <QuoteBadge :quote="row.quote" :display-value="currentPositionValue(row)" compact />
+```
+
+```ts
+// 错误：“低于上卖”仅判断 vsLastSellPct < 0，会把上卖价高于低批买入价的仓位也筛进来。
+function isBelowLastSell(position: DashboardPosition): boolean {
+  const diffPct = parseFiniteNumber(position.vsLastSellPct)
+  return diffPct !== null && diffPct < 0
+}
+```
+
+```ts
+// 正确：“低于上卖”同时校验现价低于上次卖出价，且上次卖出价严格小于低批买入价。
+function isBelowLastSell(position: DashboardPosition): boolean {
+  const diffPct = parseFiniteNumber(position.vsLastSellPct)
+  if (diffPct === null || diffPct >= 0) return false
+  const lastSellPrice = parseFiniteNumber(position.lastSellPrice)
+  const lowestPurchasePrice = parseFiniteNumber(position.lowestPriceGroup?.purchasePrice)
+  return lastSellPrice !== null && lowestPurchasePrice !== null && lastSellPrice < lowestPurchasePrice
+}
 ```
