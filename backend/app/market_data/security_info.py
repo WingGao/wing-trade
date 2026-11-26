@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
+from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request
 
@@ -63,6 +65,7 @@ class SecurityInfoProvider:
     _search_url = "https://searchapi.eastmoney.com/api/suggest/get"
     _trends_url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
     _fund_nav_url = "https://api.fund.eastmoney.com/f10/lsjz"
+    _tencent_cn_minute_url = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
     _tencent_us_minute_url = "https://web.ifzq.gtimg.cn/appstock/app/usMinute/query"
     _max_response_bytes = 2 * 1024 * 1024
 
@@ -73,8 +76,10 @@ class SecurityInfoProvider:
         now: Callable[[], datetime] | None = None,
         timeout_seconds: int = 5,
         us_resolver: USMarketResolver | None = None,
+        longbridge_intraday_fetcher: Callable[[str], Sequence[Any]] | None = None,
+        longbridge_prev_close_fetcher: Callable[[str], Decimal | None] | None = None,
     ) -> None:
-        """复用已有有界 HTTP 传输，允许离线注入数据源、时钟与美股市场码解析器。"""
+        """复用已有有界 HTTP 传输，允许离线注入数据源、时钟、美股市场码解析器及长桥分时拉取器。"""
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self._transport = transport or EastmoneyQuoteProvider()._default_transport
@@ -83,6 +88,8 @@ class SecurityInfoProvider:
         self.calendar = AShareTradingCalendar()
         self.us_calendar = USTradingCalendar()
         self.fund_calendar = OpenFundCalendar()
+        self._longbridge_intraday_fetcher = longbridge_intraday_fetcher
+        self._longbridge_prev_close_fetcher = longbridge_prev_close_fetcher
         self._us_markets: OrderedDict[str, str] = OrderedDict()
         self._us_resolver = (
             us_resolver
@@ -93,6 +100,16 @@ class SecurityInfoProvider:
                 else shared_us_market_resolver()
             )
         )
+
+    def set_longbridge_intraday_fetcher(
+        self,
+        fetcher: Callable[[str], Sequence[Any]] | None,
+        *,
+        prev_close_fetcher: Callable[[str], Decimal | None] | None = None,
+    ) -> None:
+        """动态绑定或解除长桥当日分时拉取器与昨收价提供器。"""
+        self._longbridge_intraday_fetcher = fetcher
+        self._longbridge_prev_close_fetcher = prev_close_fetcher
 
     def now(self) -> datetime:
         """返回规范 UTC 时间，保证缓存和日期判断使用同一时钟。"""
@@ -119,9 +136,14 @@ class SecurityInfoProvider:
         request = Request(
             f"{endpoint}?{urlencode(params)}",
             headers={
-                "Accept": "application/json",
-                "User-Agent": "wing-trade/0.1 (+backend market data)",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
                 "Referer": referer,
+                "Connection": "close",
             },
         )
         body = self._transport(request, float(self.timeout_seconds))
@@ -371,20 +393,204 @@ class SecurityInfoProvider:
             error="行情源暂未更新，显示当日历史参考" if stale else None,
         )
 
+    def _cn_intraday_tencent(self, canonical: str, market: str, code: str) -> IntradaySnapshot:
+        """从腾讯 A 股分时接口读取当日真实分钟序列与最新报价，作为东财断连时的稳定回退。"""
+        now = self.now()
+        calendar = self.calendar
+        today = now.astimezone(calendar.timezone).date()
+        tencent_code = f"{market.lower()}{code}"
+        payload = self._request(
+            self._tencent_cn_minute_url,
+            {"code": tencent_code},
+            referer="https://gu.qq.com/",
+        )
+        data_map = payload.get("data")
+        if not isinstance(data_map, Mapping):
+            raise ValueError("腾讯 A 股分时响应缺少 data 字段")
+        entry = data_map.get(tencent_code)
+        if not isinstance(entry, Mapping):
+            raise ValueError("今日暂无该 A 股分时行情")
+        minute_block = entry.get("data")
+        if not isinstance(minute_block, Mapping):
+            raise ValueError("腾讯 A 股分时格式无效")
+        raw_date = str(minute_block.get("date") or "").strip()
+        try:
+            series_date = datetime.strptime(raw_date[:8], "%Y%m%d").date()
+        except ValueError as exc:
+            raise ValueError("腾讯 A 股分时缺少有效交易日期") from exc
+        if series_date != today:
+            raise ValueError("今日暂无日内行情，未将历史交易日伪装为今日")
+        rows = minute_block.get("data")
+        if not isinstance(rows, list):
+            raise ValueError("腾讯 A 股分时点列表无效")
+        by_time: dict[datetime, IntradayPoint] = {}
+        for row in rows:
+            if not isinstance(row, str):
+                continue
+            parts = row.split()
+            if len(parts) < 2 or len(parts[0]) != 4 or not parts[0].isdigit():
+                continue
+            try:
+                hour = int(parts[0][:2])
+                minute = int(parts[0][2:4])
+                point_local = datetime.combine(
+                    series_date, time(hour, minute), tzinfo=calendar.timezone
+                )
+                price = round_price(ensure_decimal(parts[1], field="intraday.price"))
+            except (TypeError, ValueError):
+                continue
+            if price <= 0 or point_local > now.astimezone(calendar.timezone):
+                continue
+            utc_time = point_local.astimezone(UTC)
+            by_time[utc_time] = IntradayPoint(utc_time, price)
+        points = tuple(by_time[t] for t in sorted(by_time))
+        if not points:
+            raise ValueError("今日暂无日内行情，未将历史交易日伪装为今日")
+        prev_close: Decimal | None = None
+        qt_block = entry.get("qt")
+        if isinstance(qt_block, Mapping):
+            qt_row = qt_block.get(tencent_code)
+            if isinstance(qt_row, list) and len(qt_row) > 4:
+                try:
+                    parsed_prev = EastmoneyQuoteProvider._optional_decimal(
+                        qt_row[4], field_name="prev_close"
+                    )
+                    if parsed_prev is not None and parsed_prev > 0:
+                        prev_close = parsed_prev
+                except (TypeError, ValueError):
+                    prev_close = None
+        stale = calendar.is_session_open(now) and now - points[-1].time > timedelta(minutes=2)
+        quote = QuoteSnapshot(
+            symbol=canonical,
+            last_price=points[-1].price,
+            prev_close=prev_close,
+            source_time=points[-1].time,
+            fetched_at=now,
+            provider="tencent-intraday",
+            is_stale=stale,
+            market_session=calendar.session_phase(points[-1].time),
+        )
+        return IntradaySnapshot(
+            symbol=canonical,
+            trading_date=today.isoformat(),
+            points=points,
+            quote=quote,
+            fetched_at=now,
+            provider="tencent-intraday",
+            is_stale=stale,
+            error="行情源暂未更新，显示当日历史参考" if stale else None,
+        )
+
+    @staticmethod
+    def _parse_longbridge_timestamp(value: Any) -> datetime | None:
+        """将长桥 IntradayLine 的 timestamp（datetime 或 Unix 秒）转换为 UTC datetime。"""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.astimezone(UTC)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if value <= 0:
+                return None
+            try:
+                return datetime.fromtimestamp(float(value), tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        return None
+
+    def _intraday_longbridge(self, canonical: str) -> IntradaySnapshot:
+        """通过长桥 OpenAPI 拉取沪深或美股当日分钟分时序列并规整为标准快照。"""
+        if self._longbridge_intraday_fetcher is None:
+            raise ValueError("未配置长桥分时拉取器")
+        now = self.now()
+        calendar = self.calendar_for_symbol(canonical)
+        today = now.astimezone(calendar.timezone).date()
+        raw_lines = self._longbridge_intraday_fetcher(canonical)
+        by_time: dict[datetime, IntradayPoint] = {}
+        for line in raw_lines or ():
+            raw_ts = (
+                line.get("timestamp")
+                if isinstance(line, Mapping)
+                else getattr(line, "timestamp", None)
+            )
+            raw_price = (
+                line.get("price")
+                if isinstance(line, Mapping)
+                else getattr(line, "price", None)
+            )
+            utc_time = self._parse_longbridge_timestamp(raw_ts)
+            if utc_time is None:
+                continue
+            try:
+                price_input = str(raw_price) if isinstance(raw_price, float) else raw_price
+                price = round_price(ensure_decimal(price_input, field="intraday.price"))
+            except (TypeError, ValueError):
+                continue
+            if (
+                price <= 0
+                or utc_time.astimezone(calendar.timezone).date() != today
+                or utc_time > now
+            ):
+                continue
+            by_time[utc_time] = IntradayPoint(utc_time, price)
+        points = tuple(by_time[t] for t in sorted(by_time))
+        if not points:
+            raise ValueError("长桥今日暂无有效日内分时数据")
+
+        prev_close: Decimal | None = None
+        if self._longbridge_prev_close_fetcher is not None:
+            try:
+                candidate = self._longbridge_prev_close_fetcher(canonical)
+                if candidate is not None and candidate > 0:
+                    prev_close = candidate
+            except Exception:
+                prev_close = None
+
+        stale = calendar.is_session_open(now) and now - points[-1].time > timedelta(minutes=2)
+        quote = QuoteSnapshot(
+            symbol=canonical,
+            last_price=points[-1].price,
+            prev_close=prev_close,
+            source_time=points[-1].time,
+            fetched_at=now,
+            provider="longbridge-intraday",
+            is_stale=stale,
+            market_session=calendar.session_phase(points[-1].time),
+        )
+        return IntradaySnapshot(
+            symbol=canonical,
+            trading_date=today.isoformat(),
+            points=points,
+            quote=quote,
+            fetched_at=now,
+            provider="longbridge-intraday",
+            is_stale=stale,
+            error="行情源暂未更新，显示当日历史参考" if stale else None,
+        )
+
     def intraday(self, symbol: str) -> IntradaySnapshot:
-        """读取单日真实分钟序列，场外基金返回近期净值曲线，美股东财失败时自动回退腾讯分时。"""
+        """读取单日真实分钟序列：沪深/美股配置长桥时优先走长桥，失败自动回退东财与腾讯分时。"""
         canonical = canonical_symbol(symbol)
         if ":" not in canonical:
             raise ValueError("日内行情需要完整市场代码")
         market, code = canonical.split(":", 1)
         if market == "OF":
             return self.fund_nav_history(canonical)
+        if self._longbridge_intraday_fetcher is not None and market in {"SH", "SZ", "US"}:
+            try:
+                return self._intraday_longbridge(canonical)
+            except Exception:
+                pass
         if market == "US":
             try:
                 return self._intraday_eastmoney(canonical, market, code)
             except Exception:
                 return self._us_intraday_tencent(canonical, code)
-        return self._intraday_eastmoney(canonical, market, code)
+        try:
+            return self._intraday_eastmoney(canonical, market, code)
+        except (http.client.HTTPException, URLError, ConnectionError):
+            if EastmoneyQuoteProvider().supports_symbol(canonical):
+                return self._cn_intraday_tencent(canonical, market, code)
+            raise
 
     def _intraday_eastmoney(self, canonical: str, market: str, code: str) -> IntradaySnapshot:
         """通过东方财富分时接口读取沪深北或美股当日分钟序列。"""

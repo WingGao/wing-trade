@@ -484,6 +484,37 @@ class LongbridgeQuoteProvider:
             raise
         return list(items or [])
 
+    def get_intraday_lines(self, symbol: str) -> list[Any]:
+        """拉取单只受支持证券（沪深/美股）的当日分钟分时序列。"""
+        lb_symbol = to_longbridge_symbol(symbol)
+        if lb_symbol is None:
+            return []
+        canonical = canonical_symbol(symbol)
+        is_us = canonical.startswith("US:")
+
+        trade_sessions: Any = None
+        try:
+            openapi = importlib.import_module("longbridge.openapi")
+            sessions_enum = getattr(openapi, "TradeSessions")
+            trade_sessions = sessions_enum.All if is_us else sessions_enum.Intraday
+        except Exception:
+            trade_sessions = None
+
+        ctx = self._get_context()
+        try:
+            if trade_sessions is not None:
+                try:
+                    items = ctx.intraday(lb_symbol, trade_sessions)
+                except TypeError:
+                    items = ctx.intraday(lb_symbol)
+            else:
+                items = ctx.intraday(lb_symbol)
+        except Exception:
+            with self._lock:
+                self._ctx = None
+            raise
+        return list(items or [])
+
     def health(self) -> ProviderHealth:
         """报告长桥静态凭据已完成配置，不在健康检查时发起公网请求。"""
         configured = bool(

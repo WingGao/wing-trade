@@ -33,6 +33,11 @@ from app.api.schemas.security import (
     WatchlistItemCreate,
     WatchlistItemUpdate,
 )
+from app.api.schemas.strategy_plan import (
+    StrategyRowInput,
+    StrategyRowsImportRequest,
+    StrategyRowUpdate,
+)
 from app.api.schemas.target import ProfitSettingWrite, ProfitTargetCreate, ProfitTargetPatch
 from app.api.schemas.trade import (
     BuyTradeRequest,
@@ -46,6 +51,7 @@ from app.api.utils import begin_write, fees_from, finish_write
 from app.api.v1.admin import router as admin_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.market import router as market_router
+from app.api.v1.market import security_info_provider as market_security_info_provider
 from app.api.v1.notifications import get_wecom_channel
 from app.api.v1.notifications import router as notifications_router
 from app.config import settings
@@ -76,6 +82,7 @@ from app.models.ledger import (
     ProfitTarget,
     QuoteCache,
     Security,
+    SecurityStrategyRow,
     Strategy,
     Trade,
     TradeMatch,
@@ -91,24 +98,31 @@ from app.services.notifications.engine import ProfitAlertEngine
 from app.services.position_refresh import PositionRefreshService
 from app.services.profit_settings import ProfitSettingsService
 from app.services.recalculate import RecalculationService
+from app.services.strategy_plan import StrategyPlanService
 from app.services.target import TargetService
 from app.services.watchlist import WatchlistService
 
-def _extract_longbridge_kline_fetcher(provider: Any) -> Any:
-    """若当前行情源包含长桥主源，返回其可复用的日 K 线拉取方法。"""
-    lb_provider: LongbridgeQuoteProvider | None = None
+def _extract_longbridge_provider(provider: Any) -> LongbridgeQuoteProvider | None:
+    """若当前行情源包含长桥主源，返回对应的 LongbridgeQuoteProvider 实例。"""
     if isinstance(provider, LongbridgeQuoteProvider):
-        lb_provider = provider
-    elif isinstance(provider, PriorityFallbackQuoteProvider) and isinstance(
+        return provider
+    if isinstance(provider, PriorityFallbackQuoteProvider) and isinstance(
         provider.primary, LongbridgeQuoteProvider
     ):
-        lb_provider = provider.primary
+        return provider.primary
+    return None
+
+
+def _extract_longbridge_kline_fetcher(provider: Any) -> Any:
+    """若当前行情源包含长桥主源，返回其可复用的日 K 线拉取方法。"""
+    lb_provider = _extract_longbridge_provider(provider)
     if lb_provider is None:
         return None
     return lambda symbol, count: lb_provider.get_daily_candlesticks(symbol, count=count)
 
 
 quote_collector = QuoteCollector(create_quote_provider())
+_longbridge_provider = _extract_longbridge_provider(quote_collector.provider)
 daily_amplitude_service = DailyAmplitudeService(
     provider=DailyAmplitudeProvider(
         timeout_seconds=settings.quote_timeout_seconds,
@@ -123,6 +137,25 @@ quote_hub = MarketDataHub(
     settings=settings,
 )
 quote_collector.service.bind_hub(quote_hub)
+
+
+def _read_longbridge_prev_close(symbol: str) -> Decimal | None:
+    """优先从内存行情中心读取昨收价，未命中时再通过长桥报价接口兜底查询。"""
+    cached = quote_hub.get_live_quote(symbol)
+    if cached is not None and cached.prev_close is not None and cached.prev_close > 0:
+        return cached.prev_close
+    if _longbridge_provider is None:
+        return None
+    quotes = _longbridge_provider.get_quotes([symbol])
+    snapshot = quotes.get(symbol)
+    return snapshot.prev_close if snapshot is not None else None
+
+
+if _longbridge_provider is not None:
+    market_security_info_provider.set_longbridge_intraday_fetcher(
+        _longbridge_provider.get_intraday_lines,
+        prev_close_fetcher=_read_longbridge_prev_close,
+    )
 profit_alert_engine = ProfitAlertEngine(
     quote_hub=quote_hub,
     session_factory=SessionLocal,
@@ -1615,4 +1648,144 @@ async def dashboard(
         include_closed=include_closed,
         mode=mode,
     )
+
+
+def strategy_row_data(row: SecurityStrategyRow) -> dict[str, Any]:
+    """将策略档位 ORM 实体序列化为前端约定的驼峰字典。"""
+    return {
+        "id": row.id,
+        "securityId": row.security_id,
+        "sortOrder": row.sort_order,
+        "buyPrice": _fmt(row.buy_price, 6),
+        "buyQty": _fmt(row.buy_qty),
+        "sellPrice": _fmt(row.sell_price, 6),
+        "sellQty": _fmt(row.sell_qty),
+        "note": row.note,
+        "status": row.status,
+        "createdAt": _dt_utc(row.created_at),
+        "updatedAt": _dt_utc(row.updated_at),
+    }
+
+
+@router.get("/securities/{security_id}/strategy-rows")
+def list_strategy_rows(
+    security_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """读取当前用户在指定标的下的全部买卖策略档位（跨账户共享）。"""
+    rows = StrategyPlanService(session).list_rows(current_user.id, security_id)
+    return [strategy_row_data(row) for row in rows]
+
+
+@router.post("/securities/{security_id}/strategy-rows/import")
+def import_strategy_rows(
+    security_id: str,
+    payload: StrategyRowsImportRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """按覆盖替换或追加模式批量导入个股买卖策略档位。"""
+    begin_write(session)
+    try:
+        rows = StrategyPlanService(session).import_rows(
+            current_user.id,
+            security_id,
+            [item.model_dump() for item in payload.rows],
+            mode=payload.mode,
+        )
+        finish_write(session, True)
+        return [strategy_row_data(row) for row in rows]
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.post("/securities/{security_id}/strategy-rows", status_code=status.HTTP_201_CREATED)
+def create_strategy_row(
+    security_id: str,
+    payload: StrategyRowInput,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """为当前用户在指定标的策略表末尾新增一条买卖档位。"""
+    begin_write(session)
+    try:
+        row = StrategyPlanService(session).create_row(
+            current_user.id,
+            security_id,
+            buy_price=payload.buy_price,
+            buy_qty=payload.buy_qty,
+            sell_price=payload.sell_price,
+            sell_qty=payload.sell_qty,
+            note=payload.note,
+            status=payload.status,
+        )
+        finish_write(session, True)
+        return strategy_row_data(row)
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.patch("/securities/{security_id}/strategy-rows/{row_id}")
+def update_strategy_row(
+    security_id: str,
+    row_id: str,
+    payload: StrategyRowUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """局部更新单条策略档位的价格、数量、备注或执行状态。"""
+    begin_write(session)
+    try:
+        updates = {
+            field: getattr(payload, field)
+            for field in payload.model_fields_set
+        }
+        row = StrategyPlanService(session).update_row(
+            current_user.id,
+            security_id,
+            row_id,
+            updates=updates,
+        )
+        finish_write(session, True)
+        return strategy_row_data(row)
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.delete("/securities/{security_id}/strategy-rows/{row_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_strategy_row(
+    security_id: str,
+    row_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """删除当前用户在指定标的下的单条策略档位。"""
+    begin_write(session)
+    try:
+        StrategyPlanService(session).delete_row(current_user.id, security_id, row_id)
+        finish_write(session, True)
+    except Exception:
+        finish_write(session, False)
+        raise
+
+
+@router.delete("/securities/{security_id}/strategy-rows", status_code=status.HTTP_204_NO_CONTENT)
+def clear_strategy_rows(
+    security_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> None:
+    """清空当前用户在指定标的下的全部策略档位。"""
+    begin_write(session)
+    try:
+        StrategyPlanService(session).clear_rows(current_user.id, security_id)
+        finish_write(session, True)
+    except Exception:
+        finish_write(session, False)
+        raise
+
 

@@ -233,3 +233,86 @@ def test_intraday_cache_size_is_bounded() -> None:
         assert list(service._attempted_at) == ["SH:600000"]
 
     asyncio.run(scenario())
+
+
+def test_cn_intraday_falls_back_to_tencent_on_eastmoney_remote_disconnect() -> None:
+    """东方财富分时接口断连（RemoteDisconnected）时，A 股自动回退腾讯分时接口并解析昨收与分钟价。"""
+    import http.client
+
+    calls: list[str] = []
+
+    def transport(request, _timeout):
+        """东财请求模拟对端直接断连，腾讯请求返回标准 A 股分时响应。"""
+        calls.append(request.full_url)
+        if "eastmoney.com" in request.full_url:
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+        return json.dumps(
+            {
+                "data": {
+                    "sh600519": {
+                        "data": {
+                            "date": "20261117",
+                            "data": [
+                                "1029 10.123 100 1012.3",
+                                "1030 10.125 200 2025.0",
+                            ],
+                        },
+                        "qt": {
+                            "sh600519": ["1", "贵州茅台", "600519", "10.125", "10.000"],
+                        },
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ).encode()
+
+    result = SecurityInfoProvider(transport=transport, now=lambda: NOW).intraday("SH:600519")
+    assert len(calls) == 2
+    assert "gtimg.cn" in calls[1]
+    assert result.provider == "tencent-intraday"
+    assert result.trading_date == "2026-11-17"
+    assert len(result.points) == 2
+    assert result.points[-1].price == Decimal("10.125000")
+    assert result.quote is not None
+    assert result.quote.prev_close == Decimal("10.000")
+    assert not result.is_stale
+
+
+def test_intraday_prefers_longbridge_and_falls_back_on_error() -> None:
+    """配置长桥分时拉取器时，沪深 A 股优先走长桥；长桥异常时自动回退东财/腾讯。"""
+    from types import SimpleNamespace
+
+    http_calls: list[str] = []
+
+    def transport(request, _timeout):
+        """记录外部 HTTP 请求并返回东财兜底响应。"""
+        http_calls.append(request.full_url)
+        return trends_payload()
+
+    def lb_ok(symbol: str):
+        """模拟长桥 SDK 返回当日分钟线。"""
+        assert symbol == "SH:600519"
+        return [
+            SimpleNamespace(timestamp=NOW - timedelta(minutes=1), price=Decimal("10.20")),
+            SimpleNamespace(timestamp=NOW, price=Decimal("10.30")),
+        ]
+
+    provider = SecurityInfoProvider(
+        transport=transport,
+        now=lambda: NOW,
+        longbridge_intraday_fetcher=lb_ok,
+        longbridge_prev_close_fetcher=lambda _sym: Decimal("10.00"),
+    )
+    snap = provider.intraday("SH:600519")
+    assert snap.provider == "longbridge-intraday"
+    assert len(http_calls) == 0
+    assert snap.points[-1].price == Decimal("10.300000")
+    assert snap.quote is not None and snap.quote.change_pct == Decimal("3.000000")
+
+    # 长桥异常时自动无缝回退到东财。
+    provider.set_longbridge_intraday_fetcher(lambda _sym: (_ for _ in ()).throw(RuntimeError("lb down")))
+    fallback = provider.intraday("SH:600519")
+    assert fallback.provider == "eastmoney"
+    assert len(http_calls) == 1
+
+

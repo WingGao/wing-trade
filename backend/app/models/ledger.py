@@ -12,6 +12,7 @@ from app.domain.enums import (
     CalcBasis,
     CycleStatus,
     LotStatus,
+    StrategyRowStatus,
     TargetStatus,
     TradeSource,
     TradeStatus,
@@ -76,6 +77,37 @@ class WatchlistItem(Base):
     note: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class SecurityStrategyRow(Base):
+    """用户与标的维度的买卖策略表档位行，跨账户共享。"""
+
+    __tablename__ = "security_strategy_rows"
+    __table_args__ = (
+        Index(
+            "ix_security_strategy_rows_user_security_order",
+            "user_id",
+            "security_id",
+            "sort_order",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    security_id: Mapped[str] = mapped_column(ForeignKey("securities.id", ondelete="CASCADE"), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    buy_price: Mapped[Decimal | None] = mapped_column(ExactDecimal(6))
+    buy_qty: Mapped[Decimal | None] = mapped_column(ExactDecimal(4))
+    sell_price: Mapped[Decimal | None] = mapped_column(ExactDecimal(6))
+    sell_qty: Mapped[Decimal | None] = mapped_column(ExactDecimal(4))
+    note: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=StrategyRowStatus.PENDING.value
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class Strategy(Base):

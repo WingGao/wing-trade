@@ -68,3 +68,11 @@ class UserStatus(_ValueEnum):
     DISABLED = "DISABLED"
 
 
+class StrategyRowStatus(_ValueEnum):
+    """个股策略表档位执行状态：待执行、已买入或已完成。"""
+
+    PENDING = "PENDING"
+    BOUGHT = "BOUGHT"
+    COMPLETED = "COMPLETED"
+
+
