@@ -18,6 +18,7 @@ import LotTable from './LotTable.vue'
 import SettledTradeTable from './SettledTradeTable.vue'
 import BuyTradeDialog from './BuyTradeDialog.vue'
 import SellMatchDrawer from './SellMatchDrawer.vue'
+import BreakevenSellDialog from './BreakevenSellDialog.vue'
 import ProfitTargetDialog from './ProfitTargetDialog.vue'
 import ProfitSettingDialog from './ProfitSettingDialog.vue'
 import FundProxyDialog from './FundProxyDialog.vue'
@@ -92,6 +93,7 @@ const marketError = ref('')
 const buyVisible = ref(false)
 const sellVisible = ref(false)
 const sellInitialQty = ref('')
+const breakevenVisible = ref(false)
 const targetVisible = ref(false)
 const globalTargetVisible = ref(false)
 const securityTargetVisible = ref(false)
@@ -611,6 +613,7 @@ onBeforeUnmount(() => {
           </el-button>
           <el-button :size="embedded ? 'small' : 'default'" :disabled="!security" @click="securityTargetVisible = true">个股止盈设置</el-button>
           <el-button :size="embedded ? 'small' : 'default'" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
+          <el-button :size="embedded ? 'small' : 'default'" type="warning" plain :disabled="!security || !accountId || !hasOpenLots" @click="breakevenVisible = true">回本卖出</el-button>
           <el-button :size="embedded ? 'small' : 'default'" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="openSellDrawer()">卖出配对</el-button>
         </div>
       </section>
@@ -752,6 +755,7 @@ onBeforeUnmount(() => {
             <el-option v-for="account in matchingAccounts" :key="account.id" :value="account.id" :label="account.name" />
           </el-select>
           <el-button size="small" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
+          <el-button size="small" type="warning" plain :disabled="!security || !accountId || !hasOpenLots" @click="breakevenVisible = true">回本卖出</el-button>
           <el-button size="small" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="openSellDrawer()">卖出配对</el-button>
           <el-button
             size="small"
@@ -872,6 +876,16 @@ onBeforeUnmount(() => {
       :existing="currentWatchlistItem"
       :last-sell-price="displayHoldingSummary?.lastSellPrice ?? currentWatchlistItem?.lastSellPrice"
       :current-price="currentQuote?.lastPrice"
+    />
+    <BreakevenSellDialog
+      v-if="security"
+      v-model="breakevenVisible"
+      :lots="displayLots"
+      :quote="currentQuote"
+      :currency="currency"
+      :is-fund="isFund"
+      :symbol-label="`${security.market}:${security.symbol}`"
+      :security-name="security.name"
     />
   </div>
 </template>
