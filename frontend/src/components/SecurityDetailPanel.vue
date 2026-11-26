@@ -22,6 +22,7 @@ import ProfitTargetDialog from './ProfitTargetDialog.vue'
 import ProfitSettingDialog from './ProfitSettingDialog.vue'
 import FundProxyDialog from './FundProxyDialog.vue'
 import WatchlistSettingDialog from './WatchlistSettingDialog.vue'
+import SecurityStrategyCard from './SecurityStrategyCard.vue'
 import IntradayChart from './IntradayChart.vue'
 import QuoteBadge from './QuoteBadge.vue'
 import { useAccountsStore } from '../stores/accounts'
@@ -721,6 +722,15 @@ onBeforeUnmount(() => {
           <SettledTradeTable :details="closedTradeDetails" :currency="currency" :is-fund="isFund" />
         </section>
       </el-card>
+
+      <SecurityStrategyCard
+        v-if="security"
+        :security-id="security.id"
+        :currency="currency"
+        :is-fund="isFund"
+        :quote="currentQuote"
+        :embedded="embedded"
+      />
     </template>
 
     <template v-else>
@@ -833,6 +843,15 @@ onBeforeUnmount(() => {
         <div class="m-compact-note is-info">跨批次卖出仅展示本批数量、分摊净回款和已实现盈亏。</div>
         <SettledTradeTable :details="closedTradeDetails" :currency="currency" :is-fund="isFund" />
       </section>
+
+      <SecurityStrategyCard
+        v-if="security"
+        :security-id="security.id"
+        :currency="currency"
+        :is-fund="isFund"
+        :quote="currentQuote"
+        :embedded="embedded"
+      />
     </template>
 
     <BuyTradeDialog v-if="security" v-model="buyVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" @saved="reloadLots(true)" />

@@ -412,6 +412,43 @@ export interface WeComNotificationTestResult {
   message: string
 }
 
+export type StrategyRowStatus = 'PENDING' | 'BOUGHT' | 'COMPLETED'
+
+export type StrategyImportMode = 'replace' | 'append'
+
+export interface StrategyRow {
+  id: string
+  securityId: string
+  sortOrder: number
+  buyPrice: string | null
+  buyQty: string | null
+  sellPrice: string | null
+  sellQty: string | null
+  note: string | null
+  status: StrategyRowStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export interface StrategyRowInput {
+  buyPrice?: string | null
+  buyQty?: string | null
+  sellPrice?: string | null
+  sellQty?: string | null
+  note?: string | null
+  status?: StrategyRowStatus
+}
+
+export interface StrategyRowUpdate {
+  buyPrice?: string | null
+  buyQty?: string | null
+  sellPrice?: string | null
+  sellQty?: string | null
+  note?: string | null
+  status?: StrategyRowStatus
+  sortOrder?: number
+}
+
 export interface ApiError {
   error?: { code?: string; message?: string; details?: Record<string, unknown> }
 }

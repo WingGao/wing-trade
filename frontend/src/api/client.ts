@@ -1,4 +1,4 @@
-import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, Trade, TradeUpdate, TradeUpdateRead, WatchlistItem, WatchlistUpdatePayload, WatchlistUpsertPayload, WeComNotificationSetting, WeComNotificationTestResult, WeComNotificationUpdate } from './types'
+import type { Account, AnalyticsSummary, ApiError, AuthMeRead, AuthUser, DashboardMode, DashboardRead, IntradayRead, InviteUserRead, LotsRead, Position, ProfitSetting, ProfitTarget, Quote, RecalculationRead, RequestCodeRead, Security, SecurityCandidate, SellPreview, StrategyImportMode, StrategyRow, StrategyRowInput, StrategyRowUpdate, Trade, TradeUpdate, TradeUpdateRead, WatchlistItem, WatchlistUpdatePayload, WatchlistUpsertPayload, WeComNotificationSetting, WeComNotificationTestResult, WeComNotificationUpdate } from './types'
 
 const base = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
@@ -99,4 +99,16 @@ export const api = {
   updateWatchlist: (securityId: string, payload: WatchlistUpdatePayload, accountId?: string) => request<WatchlistItem>(`/watchlist/${securityId}?${query({ accountId })}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   /** 取消关注指定证券。 */
   removeWatchlist: (securityId: string, accountId?: string) => request<void>(`/watchlist/${securityId}?${query({ accountId })}`, { method: 'DELETE' }),
+  /** 读取当前用户在指定标的下的全部买卖策略档位（跨账户共享）。 */
+  strategyRows: (securityId: string) => request<StrategyRow[]>(`/securities/${securityId}/strategy-rows`),
+  /** 按覆盖替换或追加模式批量导入个股买卖策略档位。 */
+  importStrategyRows: (securityId: string, payload: { mode: StrategyImportMode; rows: StrategyRowInput[] }) => request<StrategyRow[]>(`/securities/${securityId}/strategy-rows/import`, { method: 'POST', body: JSON.stringify(payload) }),
+  /** 在指定标的策略表末尾新增一条档位记录。 */
+  createStrategyRow: (securityId: string, payload: StrategyRowInput) => request<StrategyRow>(`/securities/${securityId}/strategy-rows`, { method: 'POST', body: JSON.stringify(payload) }),
+  /** 局部更新单条策略档位的价格、数量、备注或执行状态。 */
+  updateStrategyRow: (securityId: string, rowId: string, payload: StrategyRowUpdate) => request<StrategyRow>(`/securities/${securityId}/strategy-rows/${rowId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  /** 删除单条策略档位。 */
+  deleteStrategyRow: (securityId: string, rowId: string) => request<void>(`/securities/${securityId}/strategy-rows/${rowId}`, { method: 'DELETE' }),
+  /** 清空当前用户在指定标的下的全部策略档位。 */
+  clearStrategyRows: (securityId: string) => request<void>(`/securities/${securityId}/strategy-rows`, { method: 'DELETE' }),
 }
