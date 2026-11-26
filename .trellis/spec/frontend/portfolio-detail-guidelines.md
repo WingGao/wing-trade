@@ -8,7 +8,7 @@
 
 - `api.lookupSecurities`：外部候选可能没有本地 ID，选择时才创建本地证券。
 - `api.intraday`、`api.lots`、`api.recalculate`、`api.profitSetting`、`api.saveProfitSetting`：以 src/api/client.ts 当前签名为准。
-- `IntradayChart.vue` 显示真实时序，支持全绘图区指针吸附（二分查找最近横坐标点）、0% 基准线、右侧涨跌幅刻度与悬浮提示卡片；`LotTable.vue` 发出列内设置事件。
+- `IntradayChart.vue` 显示真实时序，支持全绘图区指针吸附（二分查找最近横坐标点）、0% 基准线、右侧涨跌幅刻度与悬浮提示卡片；`LotTable.vue` 发出批次行 `setTarget`（设置止盈）与 `sell`（带入剩余数量打开卖出抽屉）事件。
 - `App.vue` 顶栏全局账户切换器调用 `handleAccountChange(accountId)`，停留在 `/security/...` 时按涨幅降序跳转目标账户第一个活动持仓详情（无持仓回 `/dashboard`）。
 - `formatQuantity` 整数展示，`formatMoney(..., digits)` 支持股价三位；`percentInputToRate`/`rateToPercentInput` 精确转换字符串。
 - `utils/recalculate.ts` 的 `refreshPosition(scope, options)` 统一重算确认、防重、请求与失败分层；`isPositionRefreshing(scope)` 供两处入口绑定加载状态。
@@ -25,7 +25,7 @@
 - 总浮盈为 null 时显示破折号：仍有剩余持仓时提示“暂无有效行情”，无剩余持仓时提示“暂无持仓”；有参考值但行情过期时保留数值并提示“参考浮盈 · 行情已过期”。`includeClosed` 只控制批次和结清明细，不改变汇总。
 - 个股按市场和代码同时识别，匹配币种账户；重算确认绑定发起时的个股和账户，确认后状态变化必须放弃旧操作。
 - 股数展示整数，不改变接口原始数量字符串；当前价3位，持仓总价值与 valuationStatus 一致，部分覆盖不可显示部分总值。
-- 批次按时间倒序，短 ID 悬浮全值；止盈来源/价格与“设置”按钮都在目标列，清空显式目标恢复继承，不保存投影副本。
+- 批次按时间倒序，短 ID 悬浮全值；桌面端将数量与含费单价合并为「股数/份额 / 单位成本」、成本与现值合并为「成本 / 现值」、浮盈收益率与止盈目标合并为「浮盈 / 止盈目标」（一列多行，浮盈保留涨跌色），并在独立「操作」列（及移动端卡片头部）提供持有中批次的「卖出」与「设置」按钮。点击「卖出」通过 `SellMatchDrawer` 的 `initialQty` 以纯字符串规范化方式（去除小数末尾冗余零）预填该批次 `remainingQty`，顶部「卖出配对」入口打开时清空预填值；清空显式止盈目标恢复继承，不保存投影副本。
 - 开启“显示已结清”时，批次表下的“已结清买卖明细”表默认展示 `closedTradeDetails` 全部行，不要求逐批展开，也不增加逐批请求。显示批次短ID、买卖方向、成交时间、原始成交价、本批数量、含费买入金额/卖出净回款和卖出已实现盈亏；原始整笔成交量辅助标注。卖出主数量及金额必须使用服务端本批分摊，不复制整笔成交。关闭开关隐藏，切证券/账户清理旧明细，异步响应复用现有代次防护。
 - 卖出显式 EQUAL，确认携带预览中的明确 lotId/matchedQty，输入变化立即失效。
 - trades 主显示代码和名称，内部 ID 仅辅助 title；排序时间倒序。

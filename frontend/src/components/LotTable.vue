@@ -5,7 +5,7 @@ import { formatDateTime, formatMoney, formatPercent, formatQuantity, formatTarge
 import { useViewport } from '../utils/viewport'
 
 const props = defineProps<{ lots: Lot[]; includeClosed: boolean; currency?: Currency | null; isFund?: boolean; quote?: Quote | null }>()
-const emit = defineEmits<{ setTarget: [lot: Lot] }>()
+const emit = defineEmits<{ setTarget: [lot: Lot]; sell: [lot: Lot] }>()
 const { isMobile } = useViewport()
 const qtyTarget = computed(() => ({ currency: props.currency, securityType: props.isFund ? 'FUND' : 'STOCK' }))
 const sortedLots = computed(() => [...props.lots].sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime() || b.id.localeCompare(a.id)))
@@ -51,16 +51,65 @@ function formatTargets(lot: Lot): string {
 </script>
 <template>
   <el-table v-if="!isMobile" :data="sortedLots" row-key="id" stripe empty-text="暂无批次" class="lot-table">
-    <el-table-column label="批次 ID" min-width="110"><template #default="{ row }"><span class="lot-code" :title="row.id">{{ row.id.slice(0, 8) }}</span></template></el-table-column>
-    <el-table-column label="买入日期" min-width="170"><template #default="{ row }">{{ formatDateTime(row.executedAt) }}</template></el-table-column>
-    <el-table-column :label="isFund ? '初始份额' : '初始股数'" min-width="95"><template #default="{ row }">{{ formatQuantity(row.originalQty, qtyTarget) }}</template></el-table-column>
-    <el-table-column :label="isFund ? '剩余份额' : '剩余股数'" min-width="95"><template #default="{ row }">{{ formatQuantity(row.remainingQty, qtyTarget) }}</template></el-table-column>
-    <el-table-column label="含费单位成本" min-width="120"><template #default="{ row }">{{ formatMoney(row.unitCost, currency, priceDigits(isFund, 3)) }}</template></el-table-column>
-    <el-table-column label="成本总价" min-width="125"><template #default="{ row }"><div>{{ formatMoney(lotCostTotal(row), currency) }}</div><div v-if="row.status === 'OPEN' && row.remainingCost !== row.originalCost" class="muted">初始 {{ formatMoney(row.originalCost, currency) }}</div></template></el-table-column>
-    <el-table-column :label="isFund ? '现值 / 净值' : '现值 / 现价'" min-width="135"><template #default="{ row }"><template v-if="row.status === 'OPEN' && lotMarketValue(row) !== null"><div>{{ formatMoney(lotMarketValue(row), currency) }}</div><div class="muted">{{ isFund ? '净值' : '现价' }} {{ formatMoney(quote?.lastPrice, currency, priceDigits(isFund, 3)) }}</div></template><span v-else class="muted">—</span></template></el-table-column>
-    <el-table-column label="状态"><template #default="{ row }"><el-tag :type="row.status === 'OPEN' ? 'success' : 'info'">{{ row.status === 'OPEN' ? '持有中' : '已结清' }}</el-tag></template></el-table-column>
-    <el-table-column label="浮盈 / 收益率" min-width="160"><template #default="{ row }"><template v-if="row.status === 'OPEN'"><div :class="trendClass(row.unrealizedPnl)">{{ formatMoney(row.unrealizedPnl, currency) }}</div><div :class="['muted', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</div></template><span v-else class="muted">—</span></template></el-table-column>
-    <el-table-column label="止盈目标" min-width="235"><template #default="{ row }"><div v-if="formatTargets(row)">{{ formatTargets(row) }}<div class="muted">批次设置</div></div><template v-if="row.effectiveTarget && row.effectiveTarget.source !== 'LOT'"><div>{{ formatMoney(row.effectiveTarget.targetPriceEstimate, currency, priceDigits(isFund, 3)) }} / {{ formatTargetPercent(row.effectiveTarget.targetReturnPct) }}</div><div class="muted">继承{{ row.effectiveTarget.source === 'SECURITY' ? '个股' : '全局' }}</div></template><span v-else-if="!formatTargets(row)" class="muted">未设置</span><el-tag v-if="isEstimatedTargetReached(row)" type="warning" size="small" style="margin-right:6px">预估达标</el-tag><el-button v-if="row.status === 'OPEN'" link type="primary" @click="emit('setTarget', row)">设置</el-button></template></el-table-column>
+    <el-table-column label="批次 ID" min-width="95"><template #default="{ row }"><span class="lot-code" :title="row.id">{{ row.id.slice(0, 8) }}</span></template></el-table-column>
+    <el-table-column label="买入日期" min-width="155"><template #default="{ row }">{{ formatDateTime(row.executedAt) }}</template></el-table-column>
+    <el-table-column :label="isFund ? '份额 / 单位成本' : '股数 / 单位成本'" min-width="160">
+      <template #default="{ row }">
+        <div class="lot-cell-lines">
+          <div class="lot-primary num">
+            剩 {{ formatQuantity(row.remainingQty, qtyTarget) }}
+            <span class="muted">/ 初 {{ formatQuantity(row.originalQty, qtyTarget) }}</span>
+          </div>
+          <div class="lot-sub muted num">含费单价 {{ formatMoney(row.unitCost, currency, priceDigits(isFund, 3)) }}</div>
+        </div>
+      </template>
+    </el-table-column>
+    <el-table-column label="成本 / 现值" min-width="195">
+      <template #default="{ row }">
+        <div class="lot-cell-lines">
+          <div class="lot-primary num">
+            成本 {{ formatMoney(lotCostTotal(row), currency) }}
+            <span v-if="row.status === 'OPEN' && row.remainingCost !== row.originalCost" class="muted lot-inline-note">（初 {{ formatMoney(row.originalCost, currency) }}）</span>
+          </div>
+          <div v-if="row.status === 'OPEN' && lotMarketValue(row) !== null" class="lot-sub num">
+            现值 {{ formatMoney(lotMarketValue(row), currency) }}
+            <span class="muted">（{{ isFund ? '净值' : '现价' }} {{ formatMoney(quote?.lastPrice, currency, priceDigits(isFund, 3)) }}）</span>
+          </div>
+          <div v-else class="lot-sub muted">现值 —</div>
+        </div>
+      </template>
+    </el-table-column>
+    <el-table-column label="状态" width="88"><template #default="{ row }"><el-tag :type="row.status === 'OPEN' ? 'success' : 'info'">{{ row.status === 'OPEN' ? '持有中' : '已结清' }}</el-tag></template></el-table-column>
+    <el-table-column label="浮盈 / 止盈目标" min-width="240">
+      <template #default="{ row }">
+        <div class="lot-cell-lines">
+          <div v-if="row.status === 'OPEN'" class="lot-pnl-line num">
+            <span :class="['lot-primary', trendClass(row.unrealizedPnl)]">{{ formatMoney(row.unrealizedPnl, currency) }}</span>
+            <span :class="['lot-pnl-pct', trendClass(row.unrealizedReturnPct)]">{{ formatPercent(row.unrealizedReturnPct) }}</span>
+          </div>
+          <div v-else class="lot-sub muted">浮盈 —</div>
+          <div v-if="formatTargets(row)" class="lot-target-line">
+            <span class="num">止盈 {{ formatTargets(row) }}</span>
+            <span class="muted lot-inline-note">（批次设置）</span>
+          </div>
+          <div v-if="row.effectiveTarget && row.effectiveTarget.source !== 'LOT'" class="lot-target-line">
+            <span class="num">止盈 {{ formatMoney(row.effectiveTarget.targetPriceEstimate, currency, priceDigits(isFund, 3)) }} / {{ formatTargetPercent(row.effectiveTarget.targetReturnPct) }}</span>
+            <span class="muted lot-inline-note">（继承{{ row.effectiveTarget.source === 'SECURITY' ? '个股' : '全局' }}）</span>
+          </div>
+          <div v-else-if="!formatTargets(row)" class="lot-target-line muted">止盈 未设置</div>
+          <el-tag v-if="isEstimatedTargetReached(row)" type="warning" size="small" class="lot-target-tag">预估达标</el-tag>
+        </div>
+      </template>
+    </el-table-column>
+    <el-table-column label="操作" width="72">
+      <template #default="{ row }">
+        <div v-if="row.status === 'OPEN'" class="lot-actions">
+          <el-button link type="danger" @click="emit('sell', row)">卖出</el-button>
+          <el-button link type="primary" @click="emit('setTarget', row)">设置</el-button>
+        </div>
+        <span v-else class="muted">—</span>
+      </template>
+    </el-table-column>
   </el-table>
   <div v-else class="m-lot-list">
     <div v-if="!sortedLots.length" class="m-empty">暂无批次</div>
@@ -71,7 +120,10 @@ function formatTargets(lot: Lot): string {
           <el-tag :type="row.status === 'OPEN' ? 'success' : 'info'" size="small">{{ row.status === 'OPEN' ? '持有中' : '已结清' }}</el-tag>
           <span class="m-lot-time num">{{ formatDateTime(row.executedAt) }}</span>
         </div>
-        <el-button v-if="row.status === 'OPEN'" link type="primary" size="small" @click="emit('setTarget', row)">设置</el-button>
+        <div v-if="row.status === 'OPEN'" class="m-lot-actions">
+          <el-button link type="danger" size="small" @click="emit('sell', row)">卖出</el-button>
+          <el-button link type="primary" size="small" @click="emit('setTarget', row)">设置</el-button>
+        </div>
       </div>
       <div class="m-lot-grid">
         <div class="m-lot-cell">
@@ -112,10 +164,22 @@ function formatTargets(lot: Lot): string {
 </template>
 <style scoped>
 .lot-code { border-bottom: 1px dotted currentColor; cursor: help; font-family: ui-monospace, monospace; }
+.lot-cell-lines { display: flex; flex-direction: column; gap: 3px; line-height: 1.4; }
+.lot-primary { font-weight: 600; }
+.lot-primary:not(.up):not(.down):not(.neutral) { color: var(--el-text-color-primary); }
+.lot-sub { font-size: 12px; }
+.lot-inline-note { font-weight: 400; font-size: 12px; }
+.lot-pnl-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lot-pnl-pct { font-size: 12px; font-weight: 500; }
+.lot-target-line { font-size: 12px; line-height: 1.4; }
+.lot-target-tag { width: fit-content; }
+.lot-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.lot-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .m-lot-list { display: flex; flex-direction: column; }
 .m-lot-item { padding: 8px 10px; border-bottom: 1px solid #edf0f5; }
 .m-lot-item:last-child { border-bottom: 0; }
 .m-lot-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; }
+.m-lot-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .m-lot-meta { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; font-size: 11px; }
 .m-lot-time { color: #7d899b; }
 .m-lot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }

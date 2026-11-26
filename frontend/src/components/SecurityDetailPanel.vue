@@ -87,6 +87,7 @@ const pageError = ref('')
 const marketError = ref('')
 const buyVisible = ref(false)
 const sellVisible = ref(false)
+const sellInitialQty = ref('')
 const targetVisible = ref(false)
 const globalTargetVisible = ref(false)
 const securityTargetVisible = ref(false)
@@ -329,6 +330,7 @@ async function loadPanel(): Promise<void> {
   resolvedStrategyId.value = undefined
   buyVisible.value = false
   sellVisible.value = false
+  sellInitialQty.value = ''
   targetVisible.value = false
   securityTargetVisible.value = false
   proxyDialogVisible.value = false
@@ -428,6 +430,17 @@ async function recalculate(): Promise<void> {
 function addTarget(lot: Lot): void {
   selectedLotId.value = lot.id
   targetVisible.value = true
+}
+
+/** 打开卖出配对抽屉，并按需预填指定数量。 */
+function openSellDrawer(initialQty = ''): void {
+  sellInitialQty.value = initialQty
+  sellVisible.value = true
+}
+
+/** 点击持仓批次的卖出按钮，将该批次剩余数量带入卖出弹窗。 */
+function sellLot(lot: Lot): void {
+  openSellDrawer(lot.remainingQty)
 }
 
 /** 跟踪参考标的保存或解绑后，立即刷新详情页行情、估算分时与批次浮盈。 */
@@ -538,7 +551,7 @@ onBeforeUnmount(() => {
           <el-button v-if="!embedded" @click="globalTargetVisible = true">全局止盈设置</el-button>
           <el-button :size="embedded ? 'small' : 'default'" :disabled="!security" @click="securityTargetVisible = true">个股止盈设置</el-button>
           <el-button :size="embedded ? 'small' : 'default'" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
-          <el-button :size="embedded ? 'small' : 'default'" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button>
+          <el-button :size="embedded ? 'small' : 'default'" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="openSellDrawer()">卖出配对</el-button>
         </div>
       </section>
 
@@ -640,7 +653,7 @@ onBeforeUnmount(() => {
           </div>
         </dl>
         <div v-loading="loading || rebuilding">
-          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" />
+          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" @sell="sellLot" />
         </div>
         <section v-if="preferences.includeClosed" class="settled-trade-section">
           <h3 class="panel-title">已结清买卖明细</h3>
@@ -669,7 +682,7 @@ onBeforeUnmount(() => {
             <el-option v-for="account in matchingAccounts" :key="account.id" :value="account.id" :label="account.name" />
           </el-select>
           <el-button size="small" :disabled="!security || !accountId" @click="buyVisible = true">录入买入</el-button>
-          <el-button size="small" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="sellVisible = true">卖出配对</el-button>
+          <el-button size="small" type="danger" :disabled="!security || !accountId || !hasOpenLots" @click="openSellDrawer()">卖出配对</el-button>
           <el-button v-if="isFund" size="small" :disabled="!security" @click="proxyDialogVisible = true">{{ hasProxyBinding ? '修改跟踪' : '绑定跟踪' }}</el-button>
           <el-button size="small" :disabled="!security" @click="securityTargetVisible = true">个股止盈</el-button>
           <el-button size="small" @click="globalTargetVisible = true">全局止盈</el-button>
@@ -740,7 +753,7 @@ onBeforeUnmount(() => {
           </div>
         </dl>
         <div v-loading="loading || rebuilding">
-          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" />
+          <LotTable :lots="displayLots" :include-closed="preferences.includeClosed" :currency="currency" :is-fund="isFund" :quote="currentQuote" @set-target="addTarget" @sell="sellLot" />
         </div>
       </section>
 
@@ -752,7 +765,7 @@ onBeforeUnmount(() => {
     </template>
 
     <BuyTradeDialog v-if="security" v-model="buyVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" @saved="reloadLots(true)" />
-    <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" :lots="lots" @saved="reloadLots(true)" />
+    <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" :lots="lots" :initial-qty="sellInitialQty" @saved="reloadLots(true)" />
     <ProfitTargetDialog v-if="selectedLot" v-model="targetVisible" :lot-id="selectedLot.id" :lot="selectedLot" :is-fund="isFund" @saved="reloadLots(true)" />
     <ProfitSettingDialog v-model="globalTargetVisible" @saved="reloadLots(true)" />
     <ProfitSettingDialog v-if="security" v-model="securityTargetVisible" :security-id="security.id" @saved="reloadLots(true)" />

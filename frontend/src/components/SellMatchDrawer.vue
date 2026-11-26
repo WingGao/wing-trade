@@ -18,7 +18,7 @@ interface PreviewInput {
   key: string
 }
 
-const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string; currency?: Currency; isFund?: boolean }>()
+const props = defineProps<{ securityId: string; lots: Lot[]; accountId?: string; currency?: Currency; isFund?: boolean; initialQty?: string }>()
 const emit = defineEmits<{ saved: [] }>()
 const visible = defineModel<boolean>({ default: false })
 const { isMobile } = useViewport()
@@ -67,6 +67,13 @@ function invalidatePreview() {
   loading.value = false
 }
 
+/** 规范化带入的初始卖出数量，去除小数末尾冗余零。 */
+function normalizeQtyInput(value?: string): string {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed) return ''
+  return trimmed.includes('.') ? trimmed.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '') : trimmed
+}
+
 /** 返回批次短编号，完整编号保留在提示中。 */
 function shortLotId(lotId: string): string {
   return lotId.slice(0, 8)
@@ -74,9 +81,15 @@ function shortLotId(lotId: string): string {
 
 watch(() => [props.accountId, props.securityId, form.qty, form.price, form.executedAt, form.commission, form.otherFee], invalidatePreview)
 watch(visible, (open) => {
-  if (open) form.executedAt = nowBeijingPickerValue()
-  else invalidatePreview()
-})
+  if (open) {
+    form.executedAt = nowBeijingPickerValue()
+    if (props.initialQty !== undefined) {
+      form.qty = normalizeQtyInput(props.initialQty)
+    }
+  } else {
+    invalidatePreview()
+  }
+}, { immediate: true })
 
 /** 请求最近买入优先且跨批次等量分配的预览，并丢弃已过期响应。 */
 async function previewSell() {
