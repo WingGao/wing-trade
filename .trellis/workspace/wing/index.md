@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 29
+- **Total Sessions**: 30
 - **Last Active**: 2026-11-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~716 | Active |
+| `journal-1.md` | ~738 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 30 | 2026-11-26 | 个股详情页回本卖出测算 | `05d7a97` | `master` |
 | 29 | 2026-11-26 | 个股详情页策略表、Markdown/CSV导入及长桥分时接入 | `f6cae78`, `97ebd2c` | `master` |
 | 28 | 2026-11-26 | 清仓关注与目标买回价提醒 | `c280b2d`, `b6a46ba` | `master` |
 | 27 | 2026-11-26 | 持仓批次表格列合并与快捷卖出 | `fec2835` | `master` |

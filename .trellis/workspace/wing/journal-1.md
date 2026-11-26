@@ -714,3 +714,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 30: 个股详情页回本卖出测算
+<!-- trellis-session: v=2 fp=7ea78465ae8a5420 -->
+
+**Date**: 2026-11-26
+**Task**: 个股详情页回本卖出测算
+**Branch**: `master`
+
+### Summary
+
+在个股详情页（PC与移动端）新增回本卖出测算按钮与弹窗，实现盈利批+亏损批在±1%盈亏率容差内最大化可卖数量算法及单元测试
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `05d7a97` | feat(frontend): 个股详情页新增回本卖出测算弹窗与盈利亏损批配对算法 |
+
+### Status
+
+[OK] **Completed**
