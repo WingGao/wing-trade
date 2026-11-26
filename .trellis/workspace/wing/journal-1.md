@@ -691,3 +691,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 29: 个股详情页策略表、Markdown/CSV导入及长桥分时接入
+<!-- trellis-session: v=2 fp=f9fc05e787dff927 -->
+
+**Date**: 2026-11-26
+**Task**: 个股详情页策略表、Markdown/CSV导入及长桥分时接入
+**Branch**: `master`
+
+### Summary
+
+在个股详情页新增用户+标的维度共享的买卖策略表（含备注与状态管理）、Markdown/CSV导入解析预览与固定AI提示词复制；同时为日内股价图优先接入长桥OpenAPI分时并补充腾讯A股分时回退。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f6cae78` | feat(backend): 新增个股买卖策略表持久化接口并支持长桥与腾讯分时回退 |
+| `97ebd2c` | feat(frontend): 个股详情页新增买卖策略表、Markdown/CSV导入解析与固定AI提示词复制 |
+
+### Status
+
+[OK] **Completed**

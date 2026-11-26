@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-11-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~693 | Active |
+| `journal-1.md` | ~716 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-11-26 | 个股详情页策略表、Markdown/CSV导入及长桥分时接入 | `f6cae78`, `97ebd2c` | `master` |
 | 28 | 2026-11-26 | 清仓关注与目标买回价提醒 | `c280b2d`, `b6a46ba` | `master` |
 | 27 | 2026-11-26 | 持仓批次表格列合并与快捷卖出 | `fec2835` | `master` |
 | 26 | 2026-11-25 | 美股20日振幅接入长桥日K、修复腾讯备源与长桥时间戳时区 | `a6a4f54` | `master` |
