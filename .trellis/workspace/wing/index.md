@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
+- **Total Sessions**: 34
 - **Last Active**: 2026-11-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~804 | Active |
+| `journal-1.md` | ~827 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-11-27 | Dashboard 分栏 URL Hash 导航与企微通知红涨绿跌 | `aff1474`, `eae6e71` | `master` |
 | 33 | 2026-11-27 | 卖出配对工作台支持手动关联买入批次 | `ea17ffc` | `master` |
 | 32 | 2026-11-27 | 回本卖出弹窗新增匹配策略切换 | `a135c28` | `master` |
 | 31 | 2026-11-27 | 策略网格价格百分比与开关及站点改名 | `554087d` | `master` |

@@ -802,3 +802,26 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 34: Dashboard 分栏 URL Hash 导航与企微通知红涨绿跌
+<!-- trellis-session: v=2 fp=2440f1982a635f25 -->
+
+**Date**: 2026-11-27
+**Task**: Dashboard 分栏 URL Hash 导航与企微通知红涨绿跌
+**Branch**: `master`
+
+### Summary
+
+PC 端 Dashboard 分栏选中股票以 route.hash 为单一事实源（#MARKET:SYMBOL / 多策略 @strategyId），支持前进后退与直链恢复；企微 Markdown 止盈与买回价提醒改为红涨（warning）绿跌（info）灰平（comment）着色，并同步更新前后端 spec。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aff1474` | feat(frontend): Dashboard 分栏选中股票同步至 URL hash 支持前进后退 |
+| `eae6e71` | fix(backend): 企微通知 Markdown 改为红涨绿跌着色 |
+
+### Status
+
+[OK] **Completed**
