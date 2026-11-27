@@ -229,3 +229,56 @@ const groupKey = `${lot.status}|${buyPrice}`
 const buyPct = calcBuyVsCurrentPercent(row.buyPrice, currentPriceNum.value)
 const sellPct = calcSellVsBuyPercent(row.sellPrice, row.buyPrice)
 ```
+
+## 11. 个股详情页回本卖出测算与匹配策略契约
+
+### 11.1 适用范围
+
+适用于个股详情（独立页与 PC 首页右栏内嵌详情）的「回本卖出」纯只读测算功能（`BreakevenSellDialog.vue`、`utils/breakevenSell.ts`、`SecurityDetailPanel.vue`）。仅做盘中减仓与解套参考，不触发服务端卖出记账。
+
+### 11.2 签名
+
+- `BreakevenSellStrategy = 'HIGHEST_LOSS_FIRST' | 'MAX_QTY'`（位于 `frontend/src/utils/breakevenSell.ts`）。
+- `calculateBreakevenSell(options: BreakevenSellOptions): BreakevenSellResult`：
+  - `options.strategy?: BreakevenSellStrategy`（工具函数默认 `'MAX_QTY'` 保持向后兼容）。
+  - `result.strategy: BreakevenSellStrategy`（回显本次测算采用的策略）。
+- `BreakevenSellDialog.vue`：弹窗内维护 `strategy = ref<BreakevenSellStrategy>('HIGHEST_LOSS_FIRST')`，通过「匹配策略」分段按钮实时切换「优先消高价」与「优先多卖」。
+
+### 11.3 契约
+
+- **容差与组合约束**：在模拟卖出价下将持有中批次按 `price - unitCost` 分为盈利批、平本批与亏损批，在 `[-toleranceRate, +toleranceRate]`（默认 `±1%`）盈亏率容差内求解同时包含盈利批与亏损批的可行组合；若全仓合计本身已在容差内则直接返回全仓清仓方案。
+- **双策略匹配规则（全仓偏亏时生效）**：
+  - `HIGHEST_LOSS_FIRST`（**优先消高价**，弹窗默认）：全取盈利批与平本批，亏损批按 `unitCost` **降序**（山顶高价批优先）贪心匹配；在 A 股 100 股离散步长下若最高价批单手超容差则顺延尝试次高价批，局部微调优先按高价亏损批字典序最大化核销数量；明细表中亏损批同步按成本降序展示。
+  - `MAX_QTY`（**优先多卖**）：全取盈利批与平本批，亏损批按 `unitCost` **升序**（浅亏批优先）贪心匹配，最大化可卖总数量与回笼资金；明细表中亏损批按成本升序展示。
+- **全仓偏盈行为**：全取所有亏损批与平本批，盈利批按成本降序（浅盈优先）填充；两种策略在此场景下结果一致。
+- **市场步长**：A 股（`allowDecimalQty = false`）按 `lotStep = 100` 股取整，单批允许全额卖出含零股；美股与场外基金（`allowDecimalQty = true`）支持最多 4 位小数部分卖出。
+
+### 11.4 校验与状态矩阵
+
+| 条件 | 界面/算法行为 |
+|---|---|
+| 无 `OPEN` 批次 | `status = 'NO_OPEN_LOTS'`，提示无持仓批次 |
+| 模拟卖出价为空或 `<= 0` | `status = 'INVALID_PRICE'`，提示输入有效模拟价 |
+| 模拟价下全盈利 / 全亏损 | 分别返回 `NO_LOSS_LOTS` / `NO_PROFIT_LOTS`，展示整体浮盈率说明 |
+| 离散步长下无法落入 `±1%` | 返回 `NO_SOLUTION`，提示微调模拟卖出价 |
+| 全仓偏亏且切换「优先消高价 / 优先多卖」 | 实时重算并更新可卖数量、回笼金额、剩余持仓均价与配对明细顺序 |
+
+### 11.5 正常、边界与错误示例
+
+- 正常：现价 `10.00`，持仓 `100@8`、`200@11`、`100@12`；「优先消高价」配 `100@8 + 100@12`（卖 200 股，剩余均价 `11.00`）；「优先多卖」配 `100@8 + 200@11`（卖 300 股，剩余均价 `12.00`）。
+- 边界：A 股 100 股步长下，最高价亏损批单手亏损过大导致无法在 `±1%` 内配平时，「优先消高价」不得直接判无解，应顺延匹配次高价亏损批。
+- 错误：在「优先消高价」模式中仅以最低剩余均价作为全局比较指标，会导致算法倾向少卖低价盈利批而非核销高价亏损批。
+
+### 11.6 必须测试
+
+- 单元测试（`frontend/e2e/breakeven_sell.unit.spec.ts`）覆盖全仓偏亏下的「优先消高价」与「优先多卖」对比、A 股最高价批单手超容差顺延匹配、小数市场高价优先部分卖出、全仓偏盈、全仓直接命中、离散局部微调与五类边界状态。
+
+### 11.7 错误与正确写法
+
+```ts
+// 错误：优先消高价模式只排序贪心，离散微调比较仍沿用 totalQty 优先，导致微调覆盖高价批核销结果。
+// best = pickBetterSolution(best, candidate)
+
+// 正确：传入按成本降序排列的高价亏损批 ID 列表，按高价核销字典序优先比较后再比较总数量与接近 0%。
+best = pickBetterSolution(best, candidate, priorityLossLotIds)
+```

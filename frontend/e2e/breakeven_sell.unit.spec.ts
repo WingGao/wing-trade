@@ -62,6 +62,85 @@ test.describe('calculateBreakevenSell 回本卖出测算算法', () => {
     expect(Number(shallow?.sellQty)).toBe(1000)
   })
 
+  test('全仓偏亏（优先消高价策略）：优先匹配成本最高的亏损批并降低剩余持仓均价', () => {
+    const lots = [
+      makeLot('profit-1', 100, 8.0),
+      makeLot('loss-shallow', 200, 11.0),
+      makeLot('loss-highest', 100, 12.0),
+    ]
+    // 现价 10.0：profit-1 盈 200 元；优先消高价应先配完 100 股 12 元（亏 200 元），剩余 200 股 11 元（均价 11.0）
+    const highFirst = calculateBreakevenSell({
+      lots,
+      price: '10.00',
+      allowDecimalQty: false,
+      lotStep: 100,
+      strategy: 'HIGHEST_LOSS_FIRST',
+    })
+    const maxQty = calculateBreakevenSell({
+      lots,
+      price: '10.00',
+      allowDecimalQty: false,
+      lotStep: 100,
+      strategy: 'MAX_QTY',
+    })
+
+    expect(highFirst.status).toBe('OK')
+    expect(highFirst.strategy).toBe('HIGHEST_LOSS_FIRST')
+    const highestAlloc = highFirst.allocations.find((item) => item.lotId === 'loss-highest')
+    expect(highestAlloc).toBeDefined()
+    expect(Number(highestAlloc?.sellQty)).toBe(100)
+    expect(Number(highFirst.sellQty)).toBe(200)
+    expect(Number(highFirst.remainingAvgCostAfter)).toBeCloseTo(11.0, 4)
+
+    // 对比优先多卖策略：卖出 300 股但剩余均价停留在 12.0
+    expect(maxQty.status).toBe('OK')
+    expect(Number(maxQty.sellQty)).toBe(300)
+    expect(Number(maxQty.remainingAvgCostAfter)).toBeCloseTo(12.0, 4)
+    expect(Number(highFirst.remainingAvgCostAfter)).toBeLessThan(Number(maxQty.remainingAvgCostAfter))
+  })
+
+  test('全仓偏亏（优先消高价 + A股步长）：最高价批单手超容差时顺延匹配次高价亏损批', () => {
+    const lots = [
+      makeLot('profit-1', 100, 9.0),
+      makeLot('loss-mid', 100, 11.0),
+      makeLot('loss-extreme', 100, 15.0),
+    ]
+    // 现价 10.0：100 股 15 元亏 500 元无法与 100 股 9 元（盈 100 元）在 ±1% 内配平，应顺延匹配 11 元批
+    const res = calculateBreakevenSell({
+      lots,
+      price: '10.00',
+      allowDecimalQty: false,
+      lotStep: 100,
+      strategy: 'HIGHEST_LOSS_FIRST',
+    })
+    expect(res.status).toBe('OK')
+    expect(res.allocations.find((item) => item.lotId === 'loss-extreme')).toBeUndefined()
+    expect(Number(res.allocations.find((item) => item.lotId === 'loss-mid')?.sellQty)).toBe(100)
+    expect(Number(res.estimatedReturnPct)).toBeCloseTo(0, 2)
+  })
+
+  test('全仓偏亏（优先消高价 + 允许小数）：优先消完最高价批并用剩余容差部分匹配次高价批', () => {
+    const lots = [
+      makeLot('profit-1', 10, 80),
+      makeLot('loss-mid', 20, 110),
+      makeLot('loss-highest', 10, 120),
+    ]
+    const res = calculateBreakevenSell({
+      lots,
+      price: '100',
+      allowDecimalQty: true,
+      strategy: 'HIGHEST_LOSS_FIRST',
+    })
+    expect(res.status).toBe('OK')
+    const highestAlloc = res.allocations.find((item) => item.lotId === 'loss-highest')
+    expect(Number(highestAlloc?.sellQty)).toBe(10)
+    const lossAllocs = res.allocations.filter((item) => item.side === 'LOSS')
+    expect(lossAllocs[0]?.lotId).toBe('loss-highest')
+    const retPct = Number(res.estimatedReturnPct)
+    expect(retPct).toBeGreaterThanOrEqual(-1.0)
+    expect(retPct).toBeLessThanOrEqual(1.0)
+  })
+
   test('全仓偏盈（A股100股步长）：全用亏损批 + 优先浅盈批并支持部分卖出', () => {
     const lots = [
       makeLot('profit-deep', 1000, 8.0),

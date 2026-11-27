@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { Currency, Lot, Quote } from '../api/types'
-import { calculateBreakevenSell } from '../utils/breakevenSell'
+import { calculateBreakevenSell, type BreakevenSellStrategy } from '../utils/breakevenSell'
 import {
   formatDateTime,
   formatDecimal,
@@ -28,6 +28,7 @@ const visible = defineModel<boolean>({ default: false })
 const { isMobile } = useViewport()
 
 const simPrice = ref('')
+const strategy = ref<BreakevenSellStrategy>('HIGHEST_LOSS_FIRST')
 
 const isUS = computed(() => props.currency === 'USD')
 const allowDecimalQty = computed(() => Boolean(props.isFund) || isUS.value)
@@ -65,6 +66,7 @@ const result = computed(() =>
     allowDecimalQty: allowDecimalQty.value,
     lotStep: 100,
     toleranceRate: 0.01,
+    strategy: strategy.value,
   }),
 )
 
@@ -86,12 +88,14 @@ function shortDate(iso: string): string {
   return full === '—' ? full : full.slice(0, 10)
 }
 
-/** 返回当前市场步长与容差规则提示文案。 */
-const ruleHintText = computed(() =>
-  allowDecimalQty.value
-    ? '规则：盈亏率容差 ±1% · 盈利批+亏损批组合最大化可卖量 · 支持最多 4 位小数（不含卖出手续费）'
-    : '规则：盈亏率容差 ±1% · 盈利批+亏损批组合最大化可卖量 · A 股按 100 股步长（不含卖出手续费）',
-)
+/** 返回当前市场步长、策略与容差规则提示文案。 */
+const ruleHintText = computed(() => {
+  const strategyText = strategy.value === 'HIGHEST_LOSS_FIRST'
+    ? '亏损批优先匹配最高成本价（降剩余均价）'
+    : '亏损批优先匹配浅亏批（最大化可卖量）'
+  const stepText = allowDecimalQty.value ? '支持最多 4 位小数' : 'A 股按 100 股步长'
+  return `规则：盈亏率容差 ±1% · ${strategyText} · ${stepText}（不含卖出手续费）`
+})
 </script>
 
 <template>
@@ -124,6 +128,17 @@ const ruleHintText = computed(() =>
         >
           恢复现价
         </el-button>
+      </div>
+      <div class="be-strategy-row">
+        <span class="be-price-label">匹配策略</span>
+        <el-radio-group
+          v-model="strategy"
+          :size="isMobile ? 'small' : 'default'"
+          aria-label="回本卖出匹配策略"
+        >
+          <el-radio-button value="HIGHEST_LOSS_FIRST">优先消高价</el-radio-button>
+          <el-radio-button value="MAX_QTY">优先多卖</el-radio-button>
+        </el-radio-group>
       </div>
       <div class="be-price-meta muted">
         <span>当前价：<strong class="num">{{ latestPriceText }}</strong></span>
@@ -321,6 +336,13 @@ const ruleHintText = computed(() =>
 .be-price-input {
   width: 180px;
   max-width: 100%;
+}
+.be-strategy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
 }
 .be-price-meta {
   display: flex;

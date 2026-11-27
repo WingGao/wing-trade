@@ -1,7 +1,8 @@
 /**
  * 个股详情页回本卖出测算工具。
  * 在给定模拟卖出价下，组合持有中的盈利批次与亏损批次，
- * 在 [-toleranceRate, +toleranceRate]（默认 ±1%）盈亏率容差内求解最大化可卖总数量的方案。
+ * 在 [-toleranceRate, +toleranceRate]（默认 ±1%）盈亏率容差内求解回本卖出方案。
+ * 支持“优先消高价（深亏优先）”与“优先多卖（浅亏优先）”两种亏损批匹配策略。
  * 纯只读测算逻辑，不修改服务端账务状态。
  */
 import type { Lot } from '../api/types'
@@ -15,6 +16,13 @@ export type BreakevenSellStatus =
   | 'NO_PROFIT_LOTS'
   | 'NO_SOLUTION'
 
+/**
+ * 亏损批次匹配策略：
+ * - HIGHEST_LOSS_FIRST: 优先消高价（亏损批按成本从高到低匹配，优先核销山顶套牢批并降低剩余持仓均价）
+ * - MAX_QTY: 优先多卖（亏损批按成本从低到高匹配，最大化可卖总数量与回笼资金）
+ */
+export type BreakevenSellStrategy = 'HIGHEST_LOSS_FIRST' | 'MAX_QTY'
+
 export interface BreakevenSellOptions {
   /** 当前持仓批次列表（内部仅取 OPEN 且剩余数量大于 0 的批次） */
   lots: Lot[]
@@ -26,6 +34,8 @@ export interface BreakevenSellOptions {
   lotStep?: number
   /** 盈亏率容差（小数形式，默认 0.01 代表 ±1%） */
   toleranceRate?: number
+  /** 亏损批次匹配策略（默认 MAX_QTY 保持向后兼容） */
+  strategy?: BreakevenSellStrategy
 }
 
 export interface BreakevenLotAllocation {
@@ -45,6 +55,8 @@ export interface BreakevenLotAllocation {
 
 export interface BreakevenSellResult {
   status: BreakevenSellStatus
+  /** 本次测算采用的亏损批匹配策略 */
+  strategy: BreakevenSellStrategy
   price: string | null
   tolerancePct: string
   totalHoldingQty: string
@@ -205,13 +217,26 @@ function evaluateCandidate(
   }
 }
 
-/** 比较两个合法候选解，返回更优者（总数量大优先 → 更接近 0% 优先 → 批次数少优先）。 */
+/**
+ * 比较两个合法候选解，返回更优者。
+ * - 若传入 priorityLossLotIds（优先消高价策略），先按高价亏损批序字典序最大化核销数量；
+ * - 随后按总数量大优先 → 更接近 0% 优先 → 批次数少优先。
+ */
 function pickBetterSolution(
   current: CandidateSolution | null,
   candidate: CandidateSolution | null,
+  priorityLossLotIds?: string[],
 ): CandidateSolution | null {
   if (!candidate) return current
   if (!current) return candidate
+  if (priorityLossLotIds?.length) {
+    for (const lotId of priorityLossLotIds) {
+      const candQty = candidate.quantities.get(lotId) ?? 0
+      const currQty = current.quantities.get(lotId) ?? 0
+      if (candQty > currQty + QTY_EPS) return candidate
+      if (currQty > candQty + QTY_EPS) return current
+    }
+  }
   if (candidate.totalQty > current.totalQty + QTY_EPS) return candidate
   if (current.totalQty > candidate.totalQty + QTY_EPS) return current
   if (Math.abs(candidate.returnRate) + 1e-7 < Math.abs(current.returnRate)) return candidate
@@ -280,7 +305,7 @@ function greedyFillSide(
   return { quantities, criticalLot }
 }
 
-/** 针对 A 股等离散步长，在边界跳过 ±1% 时通过微调对侧批次手数寻找可行最大化组合。 */
+/** 针对 A 股等离散步长，在边界跳过 ±1% 时通过微调对侧批次手数寻找可行最优组合。 */
 function searchDiscreteRefinement(
   baseQuantities: Map<string, number>,
   adjustableLots: NormalizedLot[],
@@ -290,6 +315,7 @@ function searchDiscreteRefinement(
   price: number,
   toleranceRate: number,
   lotStep: number,
+  priorityLossLotIds?: string[],
 ): CandidateSolution | null {
   let best: CandidateSolution | null = null
 
@@ -325,6 +351,7 @@ function searchDiscreteRefinement(
       best = pickBetterSolution(
         best,
         evaluateCandidate(quantities, lotsById, price, toleranceRate),
+        priorityLossLotIds,
       )
     }
   }
@@ -335,6 +362,7 @@ function searchDiscreteRefinement(
 /** 构造无解或异常状态下的标准测算返回对象。 */
 function buildEmptyResult(
   status: BreakevenSellStatus,
+  strategy: BreakevenSellStrategy,
   price: number | null,
   toleranceRate: number,
   totalHoldingQty: number,
@@ -344,6 +372,7 @@ function buildEmptyResult(
   const avgCostAfter = totalHoldingQty > QTY_EPS ? formatFixed(totalHoldingCost / totalHoldingQty, 6) : null
   return {
     status,
+    strategy,
     price: price !== null ? formatFixed(price, 6) : null,
     tolerancePct: formatFixed(toleranceRate * 100, 2),
     totalHoldingQty: formatFixed(totalHoldingQty, 4),
@@ -366,13 +395,14 @@ function buildEmptyResult(
 
 /**
  * 基于当前模拟卖出价测算“盈利批 + 亏损批”组合回本卖出方案。
- * 优先在 [-toleranceRate, +toleranceRate] 容差内最大化可卖出总数量，
- * 同数量下优先选择组合盈亏率最接近 0% 的组合。
+ * 在 [-toleranceRate, +toleranceRate] 容差内，按所选策略（优先消高价 / 优先多卖）求解最优组合，
+ * 同优先级下优先选择组合盈亏率最接近 0% 的方案。
  */
 export function calculateBreakevenSell(options: BreakevenSellOptions): BreakevenSellResult {
   const toleranceRate = options.toleranceRate ?? 0.01
   const lotStep = options.lotStep ?? 100
   const allowDecimalQty = options.allowDecimalQty
+  const strategy: BreakevenSellStrategy = options.strategy ?? 'MAX_QTY'
 
   const openLots = options.lots
     .filter((lot) => lot.status === 'OPEN')
@@ -395,12 +425,12 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
   const totalHoldingCost = openLots.reduce((sum, item) => sum + item.remainingCost, 0)
 
   if (!openLots.length || totalHoldingQty <= QTY_EPS) {
-    return buildEmptyResult('NO_OPEN_LOTS', null, toleranceRate, 0, 0, null)
+    return buildEmptyResult('NO_OPEN_LOTS', strategy, null, toleranceRate, 0, 0, null)
   }
 
   const price = parsePositiveNumber(options.price)
   if (price === null) {
-    return buildEmptyResult('INVALID_PRICE', null, toleranceRate, totalHoldingQty, totalHoldingCost, null)
+    return buildEmptyResult('INVALID_PRICE', strategy, null, toleranceRate, totalHoldingQty, totalHoldingCost, null)
   }
 
   const overallReturnRate = calcReturnRate(price * totalHoldingQty, totalHoldingCost)
@@ -427,10 +457,10 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
   }
 
   if (!lossLots.length) {
-    return buildEmptyResult('NO_LOSS_LOTS', price, toleranceRate, totalHoldingQty, totalHoldingCost, overallReturnPct)
+    return buildEmptyResult('NO_LOSS_LOTS', strategy, price, toleranceRate, totalHoldingQty, totalHoldingCost, overallReturnPct)
   }
   if (!profitLots.length) {
-    return buildEmptyResult('NO_PROFIT_LOTS', price, toleranceRate, totalHoldingQty, totalHoldingCost, overallReturnPct)
+    return buildEmptyResult('NO_PROFIT_LOTS', strategy, price, toleranceRate, totalHoldingQty, totalHoldingCost, overallReturnPct)
   }
 
   let best: CandidateSolution | null = null
@@ -439,11 +469,17 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
   const allMap = new Map<string, number>(openLots.map((item) => [item.lot.id, item.remainingQty]))
   best = pickBetterSolution(best, evaluateCandidate(allMap, lotsById, price, toleranceRate))
 
-  // 2. 若全仓未直接命中，则按偏亏/偏盈方向执行贪心最大化求解
+  // 2. 若全仓未直接命中，则按偏亏/偏盈方向执行贪心求解
   if (!best) {
     if (overallReturnRate < -toleranceRate) {
-      // 全仓偏亏：全取盈利批与平本批，亏损批按单位成本从低到高（浅亏优先）填充
-      const lossAsc = [...lossLots].sort((a, b) => a.unitCost - b.unitCost)
+      // 全仓偏亏：全取盈利批与平本批，亏损批按所选策略排序填充
+      // HIGHEST_LOSS_FIRST 按成本降序（最高价优先）；MAX_QTY 按成本升序（浅亏优先）
+      const lossOrdered = strategy === 'HIGHEST_LOSS_FIRST'
+        ? [...lossLots].sort((a, b) => b.unitCost - a.unitCost)
+        : [...lossLots].sort((a, b) => a.unitCost - b.unitCost)
+      const priorityLossLotIds = strategy === 'HIGHEST_LOSS_FIRST'
+        ? lossOrdered.map((item) => item.lot.id)
+        : undefined
       const baseMap = new Map<string, number>()
       let baseQty = 0
       let baseCost = 0
@@ -457,14 +493,18 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
         baseMap,
         baseQty,
         baseCost,
-        lossAsc,
+        lossOrdered,
         'FILL_LOSS',
         price,
         toleranceRate,
         allowDecimalQty,
         lotStep,
       )
-      best = pickBetterSolution(best, evaluateCandidate(quantities, lotsById, price, toleranceRate))
+      best = pickBetterSolution(
+        best,
+        evaluateCandidate(quantities, lotsById, price, toleranceRate),
+        priorityLossLotIds,
+      )
 
       // 离散步长下若主路径被 ±1% 区间夹空或有更优组合，尝试微调盈利批手数
       if (!allowDecimalQty) {
@@ -474,13 +514,15 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
           searchDiscreteRefinement(
             baseMap,
             profitByImpact,
-            lossAsc,
+            lossOrdered,
             'FILL_LOSS',
             lotsById,
             price,
             toleranceRate,
             lotStep,
+            priorityLossLotIds,
           ),
+          priorityLossLotIds,
         )
       }
     } else {
@@ -528,10 +570,10 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
   }
 
   if (!best) {
-    return buildEmptyResult('NO_SOLUTION', price, toleranceRate, totalHoldingQty, totalHoldingCost, overallReturnPct)
+    return buildEmptyResult('NO_SOLUTION', strategy, price, toleranceRate, totalHoldingQty, totalHoldingCost, overallReturnPct)
   }
 
-  // 盈利批在前（按成本升序），平本批居中，亏损批在后（按成本升序）
+  // 盈利批在前（按成本升序），平本批居中，亏损批在后（按所选策略对应的成本顺序排列）
   const sideOrder: Record<'PROFIT' | 'FLAT' | 'LOSS', number> = { PROFIT: 0, FLAT: 1, LOSS: 2 }
   const allocations: BreakevenLotAllocation[] = Array.from(best.quantities.entries())
     .map(([lotId, qty]) => {
@@ -557,6 +599,9 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
     })
     .sort((a, b) => {
       if (sideOrder[a.side] !== sideOrder[b.side]) return sideOrder[a.side] - sideOrder[b.side]
+      if (a.side === 'LOSS' && strategy === 'HIGHEST_LOSS_FIRST') {
+        return Number(b.unitCost) - Number(a.unitCost)
+      }
       return Number(a.unitCost) - Number(b.unitCost)
     })
 
@@ -570,6 +615,7 @@ export function calculateBreakevenSell(options: BreakevenSellOptions): Breakeven
 
   return {
     status: 'OK',
+    strategy,
     price: formatFixed(price, 6),
     tolerancePct: formatFixed(toleranceRate * 100, 2),
     totalHoldingQty: formatFixed(totalHoldingQty, 4),
