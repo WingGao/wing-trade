@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Currency, DashboardMode, DashboardPosition, Lot, PositionRefreshScope, Security, SecurityCandidate, ValuationStatus } from '../api/types'
 import { useAccountsStore } from '../stores/accounts'
@@ -30,6 +30,7 @@ const ledger = useLedgerStore()
 const preferences = usePreferencesStore()
 const quotesStore = useQuotesStore()
 const watchlistStore = useWatchlistStore()
+const route = useRoute()
 const router = useRouter()
 const { isMobile } = useViewport()
 const dashboard = computed(() =>
@@ -45,7 +46,6 @@ const positions = computed(() =>
     preferences.showWatchlist,
   ),
 )
-const selectedPositionKey = ref<string | null>(null)
 const streamStatusText = computed(() => {
   if (quotesStore.connectionState === 'live') return '实时推送中'
   if (quotesStore.connectionState === 'reconnecting') return '行情重连中'
@@ -99,9 +99,69 @@ const selectedAccount = computed(() => accounts.value.find((account) => account.
 const accountMatchesSecurity = computed(() => !selectedSecurity.value || selectedAccount.value?.currency === requiredCurrency.value)
 const requiredCurrency = computed<'CNY' | 'USD'>(() => selectedSecurity.value?.currency ?? (selectedSecurity.value?.market === 'US' ? 'USD' : 'CNY'))
 
+interface DashboardHashTarget {
+  market: string
+  symbol: string
+  strategyId?: string
+}
+
 /** 构造持仓行的稳定唯一键。 */
 function positionKey(position: DashboardPosition): string {
   return `${position.securityId}|${position.strategyId}`
+}
+
+/** 安全解码 URL 片段，遇到非法编码时回退原始文本。 */
+function safeDecodeHashPart(raw: string): string {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
+/** 解析 URL hash 中的个股定位信息（支持 `#MARKET:SYMBOL` 及多策略 `#MARKET:SYMBOL@strategyId`）。 */
+function parsePositionHash(rawHash: string): DashboardHashTarget | null {
+  const trimmed = rawHash.replace(/^#/, '').trim()
+  if (!trimmed) return null
+  const atIndex = trimmed.indexOf('@')
+  const symbolPart = safeDecodeHashPart(atIndex >= 0 ? trimmed.slice(0, atIndex) : trimmed).trim()
+  const strategyPart = atIndex >= 0 ? safeDecodeHashPart(trimmed.slice(atIndex + 1)).trim() : ''
+  const colonIndex = symbolPart.indexOf(':')
+  if (colonIndex <= 0 || colonIndex === symbolPart.length - 1) return null
+  const market = symbolPart.slice(0, colonIndex).trim().toUpperCase()
+  const symbol = symbolPart.slice(colonIndex + 1).trim().toUpperCase()
+  if (!market || !symbol) return null
+  return strategyPart ? { market, symbol, strategyId: strategyPart } : { market, symbol }
+}
+
+/** 生成持仓对应的 URL hash；同证券存在多策略时附加策略标识以区分。 */
+function buildPositionHash(position: DashboardPosition, list: DashboardPosition[]): string {
+  const market = position.market?.trim().toUpperCase()
+  const symbol = position.symbol?.trim().toUpperCase()
+  if (!market || !symbol) return ''
+  const base = `#${market}:${symbol}`
+  const sameSecurityCount = list.filter(
+    (item) => item.market?.trim().toUpperCase() === market && item.symbol?.trim().toUpperCase() === symbol,
+  ).length
+  if (sameSecurityCount > 1 && position.strategyId) {
+    return `${base}@${encodeURIComponent(position.strategyId)}`
+  }
+  return base
+}
+
+/** 根据解析后的 hash 定位目标持仓，优先精确匹配策略，否则回退同证券首个持仓。 */
+function findPositionByHash(list: DashboardPosition[], target: DashboardHashTarget): DashboardPosition | null {
+  const sameSecurity = list.filter(
+    (item) =>
+      item.market?.trim().toUpperCase() === target.market
+      && item.symbol?.trim().toUpperCase() === target.symbol,
+  )
+  if (!sameSecurity.length) return null
+  if (target.strategyId) {
+    const exact = sameSecurity.find((item) => item.strategyId === target.strategyId)
+    if (exact) return exact
+  }
+  return sameSecurity[0] ?? null
 }
 
 /** 按默认当日涨幅降序挑出首个可展示详情的持仓（缺行情置后）。 */
@@ -121,11 +181,14 @@ function pickDefaultDetailPosition(list: DashboardPosition[]): DashboardPosition
   return candidates[0] ?? null
 }
 
-/** 当前 PC 右栏联动展示的个股持仓对象。 */
+/** 当前 URL hash 中指定的个股定位目标。 */
+const hashDetailTarget = computed<DashboardHashTarget | null>(() => parsePositionHash(route.hash))
+
+/** 当前 PC 右栏联动展示的个股持仓对象，优先遵循 URL hash，缺省回退默认排序首项。 */
 const activeDetailPosition = computed<DashboardPosition | null>(() => {
   if (!positions.value.length) return null
-  if (selectedPositionKey.value) {
-    const matched = positions.value.find((item) => positionKey(item) === selectedPositionKey.value && item.market && item.symbol)
+  if (hashDetailTarget.value) {
+    const matched = findPositionByHash(positions.value, hashDetailTarget.value)
     if (matched) return matched
   }
   return pickDefaultDetailPosition(positions.value)
@@ -135,13 +198,17 @@ const effectiveSelectedKey = computed<string | null>(() =>
   activeDetailPosition.value ? positionKey(activeDetailPosition.value) : null,
 )
 
-/** 在 PC 端点击左侧活动仓位时，切换右侧详情面板展示的目标持仓。 */
+/** 在 PC 端点击左侧活动仓位时，将目标股票写入 URL hash 以支持浏览器前进后退并联动右栏。 */
 function selectDesktopPosition(position: DashboardPosition): void {
   if (!position.market || !position.symbol) {
     void openPosition(position)
     return
   }
-  selectedPositionKey.value = positionKey(position)
+  const nextHash = buildPositionHash(position, positions.value)
+  if (!nextHash || route.hash === nextHash) return
+  const isAlreadyActive = activeDetailPosition.value !== null && positionKey(activeDetailPosition.value) === positionKey(position)
+  const navigate = isAlreadyActive ? router.replace : router.push
+  void navigate({ path: route.path, query: route.query, hash: nextHash })
 }
 
 let pollTimer: number | null = null
@@ -421,7 +488,9 @@ watch(() => accountsStore.activeAccountId, (nextAccountId) => {
   if (!nextAccountId) return
   if (!selectedSecurity.value) selectedAccountId.value = nextAccountId
   if (!pageAlive.value || nextAccountId === dashboard.value?.accountId) return
-  selectedPositionKey.value = null
+  if (route.hash) {
+    void router.replace({ path: route.path, query: route.query, hash: '' })
+  }
   queryGeneration += 1
   ledger.invalidateDashboard()
   void loadValuation('auto')

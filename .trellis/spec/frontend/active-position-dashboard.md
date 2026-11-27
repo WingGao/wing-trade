@@ -18,7 +18,7 @@
   - `低于上卖`：同时满足 `vsLastSellPct < 0`（有效现价低于上次卖出价）**且** `lastSellPrice < lowestPriceGroup.purchasePrice`（上次卖出价严格小于低批买入价），任一数值缺失或非有限数字均不命中；
   - `浮亏仓位`：`unrealizedPnl < 0`。
 - **五维正反排序**：默认按「现价（当日涨跌幅 `quote.changePct`）」降序；表头「总市值」「浮盈」「现价」「低批」「上卖」5 个标题均可独立点击正反切换排序（无“取消排序”第三态，**表头不增加振幅排序**），任意排序维度与方向下缺失值始终排在末尾。
-- **PC 端主从联动**：PC 端首页右侧空余区域直接内嵌 `SecurityDetailPanel` 展示当前选中仓位的个股详情，默认选中当前排序第一只持仓；点击左侧仓位即时切换右侧详情，右侧写入操作完成后同步刷新左侧仓位快照。
+- **PC 端主从联动与 URL Hash 导航**：PC 端首页右侧空余区域直接内嵌 `SecurityDetailPanel` 展示当前选中仓位的个股详情，选中态以 `route.hash` 为单一事实源（格式 `#MARKET:SYMBOL`，同证券多策略时为 `#MARKET:SYMBOL@<strategyId>`）；未带 hash 或 hash 未命中当前账户仓位时默认回退排序第一只持仓。点击其他仓位使用 `router.push` 写入 hash 以支持浏览器前进/后退；点击当前已展示的默认仓位或切换全局账户清空 hash 时使用 `router.replace`，避免产生无效后退步；右侧写入操作完成后同步刷新左侧仓位快照。
 
 ## 4. 校验与状态矩阵
 
@@ -33,6 +33,9 @@
 | 数据刷新 | 新快照仍沿用当前排序方向，不恢复后端原始顺序 |
 | `vsLastSellPct < 0` 且 `lastSellPrice < lowestPriceGroup.purchasePrice` | 命中“低于上卖”筛选条件并计入角标 |
 | `vsLastSellPct < 0` 但 `lastSellPrice >= lowestPriceGroup.purchasePrice`（或缺失任一价格） | 不命中“低于上卖”筛选条件 |
+| PC 端点击左侧其他仓位 | `router.push` 写入 `#MARKET:SYMBOL`（多策略附 `@strategyId`），右栏切换并可浏览器前进/后退 |
+| 直接访问 `/dashboard#MARKET:SYMBOL` | 数据加载后自动定位并高亮对应仓位；未命中或格式非法时回退默认排序首项 |
+| 切换全局账户 | 若当前存在 hash，使用 `router.replace` 清空旧账户残留 hash |
 
 ## 5. 正常、边界与错误示例
 
@@ -51,6 +54,7 @@
 - 使用至少三条持仓验证默认降序、点击列头升序，以及缺行情持仓在两种方向下均位于末尾。
 - 验证最低价批次第二行 DOM 文本为 `2批150股1,200.00`，视觉间距由 CSS 提供。
 - `active_positions_last_sell.spec.ts` 断言“低于上卖”筛选及角标同时校验 `vsLastSellPct < 0` 与 `lastSellPrice < lowestPriceGroup.purchasePrice`（覆盖命中项与仅 `现价 < 上卖` 但 `上卖 >= 低批` 的排除项）。
+- `active_positions_last_sell.spec.ts` 断言 PC 端点击仓位后 URL 写入 `#MARKET:SYMBOL`，浏览器 `goBack()` / `goForward()` 可准确切换右栏股票，且直接访问 `/dashboard#MARKET:SYMBOL` 可自动选中对应仓位。
 - 运行 `pnpm run type-check`、相关 Playwright 用例和 `pnpm run build`。
 
 ## 7. 错误与正确写法

@@ -284,10 +284,32 @@ test('PC 端活动仓位展示上次卖出价、筛选、五维正反排序并�
   await expect(detail.locator('.holding-summary')).toContainText('¥ 75.800')
   await expect(detail.locator('.holding-summary')).toContainText('-5.74%')
 
-  // 点击左侧宁德时代，右栏即时切换为宁德时代
+  // 点击左侧宁德时代，右栏即时切换为宁德时代并记录在 URL hash 中
   await rows.nth(2).click()
+  await expect(page).toHaveURL(/\/dashboard#SZ:300750$/)
   await expect(detail).toContainText('SZ:300750 宁德时代')
   await expect(detail.locator('.holding-summary')).toContainText('¥ 264.500')
+
+  // 继续点击迈瑞医疗，验证前进/后退可准确切换右栏股票
+  await rows.nth(1).click()
+  await expect(page).toHaveURL(/\/dashboard#SZ:300760$/)
+  await expect(detail).toContainText('SZ:300760 迈瑞医疗')
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/dashboard#SZ:300750$/)
+  await expect(detail).toContainText('SZ:300750 宁德时代')
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(detail).toContainText('SZ:000333 美的集团')
+
+  await page.goForward()
+  await expect(page).toHaveURL(/\/dashboard#SZ:300750$/)
+  await expect(detail).toContainText('SZ:300750 宁德时代')
+
+  await page.goForward()
+  await expect(page).toHaveURL(/\/dashboard#SZ:300760$/)
+  await expect(detail).toContainText('SZ:300760 迈瑞医疗')
 
   // 验证筛选标签数量角标与过滤（低于上卖需同时满足现价 < 上卖 且 上卖 < 低批：仅美的命中，宁德上卖 264.5 > 低批 242 不命中）
   await expect(page.getByRole('tab', { name: /全部\s*3/ })).toBeVisible()
@@ -327,4 +349,14 @@ test('PC 端活动仓位展示上次卖出价、筛选、五维正反排序并�
   await page.getByPlaceholder('代码 / 名称').fill('')
   await page.locator('.ap-compact-btn').click()
   await expect(page.locator('.ap-card')).toHaveClass(/is-compact/)
+})
+
+test('直接访问带股票 hash 的 dashboard 地址时自动选中对应分栏股票', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await mockWorkspaceApi(page)
+  await page.goto('/dashboard#SZ:300750')
+
+  const detail = page.locator('.workspace-detail')
+  await expect(detail).toContainText('SZ:300750 宁德时代')
+  await expect(page.locator('.ap-list .ap-row.is-active')).toContainText('SZ:300750')
 })
