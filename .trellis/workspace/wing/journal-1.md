@@ -736,3 +736,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 31: 策略网格价格百分比与开关及站点改名
+<!-- trellis-session: v=2 fp=46fe03df1b18b19e -->
+
+**Date**: 2026-11-27
+**Task**: 策略网格价格百分比与开关及站点改名
+**Branch**: `master`
+
+### Summary
+
+买卖策略网格新增买入价较现价百分比、卖出价较买入价百分比及持久化显示开关（桌面/移动端双端适配与单元测试）；全站标题、品牌名与邮件模板统一更名为交易账本；同步前端代码规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `554087d` | feat(frontend): 策略网格新增买入/卖出价百分比与显示开关并统一站点名为交易账本 |
+
+### Status
+
+[OK] **Completed**
