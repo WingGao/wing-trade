@@ -120,9 +120,17 @@ def _source_label(source: str, basis: str) -> str:
     return f"{source_map.get(source.upper(), source)} · {basis_label}"
 
 
+def _colorize_trend(text: str, value: Decimal | None) -> str:
+    """按红涨绿跌着色（正数 warning 橙红，负数 info 绿，零或空 comment 灰）。"""
+    if value is None or value == 0:
+        return f'<font color="comment">{text}</font>'
+    color = "warning" if value > 0 else "info"
+    return f'<font color="{color}">{text}</font>'
+
+
 def _render_item_block(index: int, item: TakeProfitAlertItem) -> str:
     """将单笔止盈命中项渲染为紧凑易读的企微 Markdown 段落。"""
-    est_badge = " <font color=\"warning\">[盘中估算]</font>" if item.is_estimated else ""
+    est_badge = ' <font color="comment">[盘中估算]</font>' if item.is_estimated else ""
     price_label = "估算净值" if item.is_estimated else "最新价"
     unit_cost_text = _fmt_price(item.unit_cost, market=item.market)
     last_price_text = _fmt_price(item.last_price, market=item.market)
@@ -132,13 +140,21 @@ def _render_item_block(index: int, item: TakeProfitAlertItem) -> str:
     target_pct_text = _fmt_rate_pct(item.target_return_pct)
     pnl_text = _fmt_money(item.estimated_pnl, item.currency)
     source_text = _source_label(item.target_source, item.calculation_basis)
+    price_trend = (
+        item.current_return_pct
+        if item.current_return_pct is not None
+        else item.last_price - item.unit_cost
+    )
+    colored_last_price = _colorize_trend(last_price_text, price_trend)
+    colored_curr_pct = _colorize_trend(curr_pct_text, item.current_return_pct)
+    colored_pnl = _colorize_trend(pnl_text, item.estimated_pnl)
     return (
         f"**{index}. {item.security_name}（{item.canonical_symbol}）**{est_badge}\n"
         f"> 账户：{item.account_name} | 数量：{qty_text}\n"
         f"> 成本：{unit_cost_text} | {price_label}："
-        f'<font color="info">{last_price_text}</font> | 目标：{target_price_text}\n'
-        f'> 收益：<font color="info">{curr_pct_text}</font>'
-        f"（目标 {target_pct_text}）| 预计浮盈：{pnl_text}\n"
+        f"{colored_last_price} | 目标：{target_price_text}\n"
+        f"> 收益：{colored_curr_pct}"
+        f"（目标 {target_pct_text}）| 预计浮盈：{colored_pnl}\n"
         f"> 规则：{source_text}"
     )
 
@@ -210,21 +226,31 @@ def format_take_profit_markdown_batches(
 
 def _render_buyback_block(index: int, item: BuybackAlertItem) -> str:
     """将单条买回价命中项渲染为紧凑易读的企微 Markdown 段落。"""
-    est_badge = ' <font color="warning">[盘中估算]</font>' if item.is_estimated else ""
+    est_badge = ' <font color="comment">[盘中估算]</font>' if item.is_estimated else ""
     price_label = "估算净值" if item.is_estimated else "最新价"
     status_label = "持仓中（低位加仓参考）" if item.has_open_position else "空仓待回接"
     last_price_text = _fmt_price(item.last_price, market=item.market)
     target_price_text = _fmt_price(item.target_price, market=item.market)
     vs_target_text = _fmt_percent_value(item.vs_target_pct)
+    price_trend = (
+        item.vs_target_pct
+        if item.vs_target_pct is not None
+        else item.last_price - item.target_price
+    )
+    colored_last_price = _colorize_trend(last_price_text, price_trend)
+    colored_vs_target = _colorize_trend(vs_target_text, item.vs_target_pct)
     lines = [
         f"**{index}. {item.security_name}（{item.canonical_symbol}）**{est_badge}",
         f"> 账户：{item.account_name} | 状态：{status_label}",
-        f'> {price_label}：<font color="info">{last_price_text}</font>'
-        f" | 目标买回价：{target_price_text}（{vs_target_text}）",
+        f"> {price_label}：{colored_last_price}"
+        f" | 目标买回价：{target_price_text}（{colored_vs_target}）",
     ]
     if item.last_sell_price is not None:
         last_sell_text = _fmt_price(item.last_sell_price, market=item.market)
-        vs_sell_text = _fmt_percent_value(item.vs_last_sell_pct)
+        vs_sell_text = _colorize_trend(
+            _fmt_percent_value(item.vs_last_sell_pct),
+            item.vs_last_sell_pct,
+        )
         lines.append(f"> 上次卖出：{last_sell_text} | 较上卖：{vs_sell_text}")
     if item.note:
         lines.append(f"> 备注：{item.note}")

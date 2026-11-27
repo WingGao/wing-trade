@@ -16,7 +16,9 @@ from app.services.notifications.channels import (
     validate_wecom_webhook_url,
 )
 from app.services.notifications.formatter import (
+    BuybackAlertItem,
     TakeProfitAlertItem,
+    build_buyback_markdown_batches,
     build_take_profit_markdown_batches,
     format_take_profit_markdown_batches,
     format_test_markdown,
@@ -154,3 +156,69 @@ def test_formatter_marks_estimated_and_splits_large_batches() -> None:
     test_md = format_test_markdown(user_label="wing@example.com", sent_at=triggered_at)
     assert "止盈推送通道测试成功" in test_md
     assert "wing@example.com" in test_md
+
+
+def test_formatter_applies_red_up_green_down_colors() -> None:
+    """企微 Markdown 应严格遵循红涨（warning）绿跌（info）灰平（comment）着色规则。"""
+    triggered_at = datetime(2026, 11, 25, 2, 30, 0, tzinfo=UTC)
+
+    # 止盈上涨项：最新价、正收益率、正预计浮盈均应为 warning（橙红）
+    tp_up = format_take_profit_markdown_batches(
+        [_sample_item(1)],
+        triggered_at=triggered_at,
+    )[0]
+    assert '<font color="warning">11.20</font>' in tp_up
+    assert '<font color="warning">+12.00%</font>' in tp_up
+    assert '<font color="warning">+¥120.00</font>' in tp_up
+
+    # 买回价下跌项：低于目标价与低于上卖均应为 info（绿），持平应为 comment（灰）
+    buyback_down = BuybackAlertItem(
+        user_id="user-1",
+        account_id="acc-1",
+        account_name="A股主账户",
+        security_id="sec-1",
+        watchlist_item_id="wl-1",
+        security_name="宁德时代",
+        canonical_symbol="SZ:300750",
+        market="SZ",
+        currency="CNY",
+        target_signature="WL|240.000000",
+        last_price=Decimal("236.500000"),
+        target_price=Decimal("240.000000"),
+        vs_target_pct=Decimal("-1.4583"),
+        last_sell_price=Decimal("250.000000"),
+        vs_last_sell_pct=Decimal("-5.4000"),
+        has_open_position=True,
+        note="低位回接",
+        is_estimated=False,
+    )
+    buyback_flat = BuybackAlertItem(
+        user_id="user-1",
+        account_id="acc-1",
+        account_name="A股主账户",
+        security_id="sec-2",
+        watchlist_item_id="wl-2",
+        security_name="美的集团",
+        canonical_symbol="SZ:000333",
+        market="SZ",
+        currency="CNY",
+        target_signature="WL|70.000000",
+        last_price=Decimal("70.000000"),
+        target_price=Decimal("70.000000"),
+        vs_target_pct=Decimal("0.0000"),
+        last_sell_price=Decimal("68.000000"),
+        vs_last_sell_pct=Decimal("2.9412"),
+        has_open_position=False,
+        note=None,
+        is_estimated=False,
+    )
+    buyback_md = build_buyback_markdown_batches(
+        [buyback_down, buyback_flat],
+        triggered_at=triggered_at,
+    )[0][1]
+    assert '<font color="info">236.50</font>' in buyback_md
+    assert '<font color="info">-1.46%</font>' in buyback_md
+    assert '<font color="info">-5.40%</font>' in buyback_md
+    assert '<font color="comment">70.00</font>' in buyback_md
+    assert '<font color="comment">0.00%</font>' in buyback_md
+    assert '<font color="warning">+2.94%</font>' in buyback_md
