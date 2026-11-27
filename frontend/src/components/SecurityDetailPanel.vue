@@ -14,10 +14,11 @@ import type {
   Security,
   SettledTradeDetail,
 } from '../api/types'
-import LotTable from './LotTable.vue'
+import LotTable, { type LotSellPayload } from './LotTable.vue'
 import SettledTradeTable from './SettledTradeTable.vue'
 import BuyTradeDialog from './BuyTradeDialog.vue'
 import SellMatchDrawer from './SellMatchDrawer.vue'
+import type { ManualSellMatchItem } from '../utils/manualSellMatch'
 import BreakevenSellDialog from './BreakevenSellDialog.vue'
 import ProfitTargetDialog from './ProfitTargetDialog.vue'
 import ProfitSettingDialog from './ProfitSettingDialog.vue'
@@ -93,6 +94,7 @@ const marketError = ref('')
 const buyVisible = ref(false)
 const sellVisible = ref(false)
 const sellInitialQty = ref('')
+const sellInitialMatches = ref<ManualSellMatchItem[]>([])
 const breakevenVisible = ref(false)
 const targetVisible = ref(false)
 const globalTargetVisible = ref(false)
@@ -339,6 +341,7 @@ async function loadPanel(): Promise<void> {
   buyVisible.value = false
   sellVisible.value = false
   sellInitialQty.value = ''
+  sellInitialMatches.value = []
   targetVisible.value = false
   securityTargetVisible.value = false
   proxyDialogVisible.value = false
@@ -440,15 +443,16 @@ function addTarget(lot: Lot): void {
   targetVisible.value = true
 }
 
-/** 打开卖出配对抽屉，并按需预填指定数量。 */
-function openSellDrawer(initialQty = ''): void {
+/** 打开卖出配对抽屉，并按需预填指定数量与手动关联批次。 */
+function openSellDrawer(initialQty = '', initialMatches: ManualSellMatchItem[] = []): void {
   sellInitialQty.value = initialQty
+  sellInitialMatches.value = initialMatches
   sellVisible.value = true
 }
 
-/** 点击持仓批次的卖出按钮，将该批次或合并组的剩余数量带入卖出弹窗。 */
-function sellLot(remainingQty: string): void {
-  openSellDrawer(remainingQty)
+/** 点击持仓批次的卖出按钮，将该批次或合并组的剩余数量与对应批次带入卖出弹窗手动关联。 */
+function sellLot(payload: LotSellPayload): void {
+  openSellDrawer(payload.qty, payload.matches)
 }
 
 /** 跟踪参考标的保存或解绑后，立即刷新详情页行情、估算分时与批次浮盈。 */
@@ -859,7 +863,7 @@ onBeforeUnmount(() => {
     </template>
 
     <BuyTradeDialog v-if="security" v-model="buyVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" @saved="reloadLots(true)" />
-    <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" :lots="lots" :initial-qty="sellInitialQty" @saved="reloadLots(true)" />
+    <SellMatchDrawer v-if="security" v-model="sellVisible" :security-id="security.id" :account-id="accountId" :currency="currency" :is-fund="isFund" :lots="lots" :initial-qty="sellInitialQty" :initial-matches="sellInitialMatches" @saved="reloadLots(true)" />
     <ProfitTargetDialog v-if="selectedLot" v-model="targetVisible" :lot-id="selectedLot.id" :lot="selectedLot" :is-fund="isFund" @saved="reloadLots(true)" />
     <ProfitSettingDialog v-model="globalTargetVisible" @saved="reloadLots(true)" />
     <ProfitSettingDialog v-if="security" v-model="securityTargetVisible" :security-id="security.id" @saved="reloadLots(true)" />

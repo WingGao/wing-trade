@@ -8,7 +8,7 @@
 
 - `api.lookupSecurities`：外部候选可能没有本地 ID，选择时才创建本地证券。
 - `api.intraday`、`api.lots`、`api.recalculate`、`api.profitSetting`、`api.saveProfitSetting`：以 src/api/client.ts 当前签名为准。
-- `IntradayChart.vue` 显示真实时序，支持全绘图区指针吸附（二分查找最近横坐标点）、0% 基准线、右侧涨跌幅刻度与悬浮提示卡片；`LotTable.vue` 发出批次行 `setTarget`（设置止盈）与 `sell`（带入剩余数量打开卖出抽屉）事件。
+- `IntradayChart.vue` 显示真实时序，支持全绘图区指针吸附（二分查找最近横坐标点）、0% 基准线、右侧涨跌幅刻度与悬浮提示卡片；`LotTable.vue` 发出批次行 `setTarget`（设置止盈）与 `sell`（携带 `LotSellPayload: { qty, matches }`，打开卖出抽屉并自动进入手动关联预选）事件。
 - `App.vue` 顶栏全局账户切换器调用 `handleAccountChange(accountId)`，停留在 `/security/...` 时按涨幅降序跳转目标账户第一个活动持仓详情（无持仓回 `/dashboard`）。
 - `formatQuantity` 整数展示，`formatMoney(..., digits)` 支持股价三位；`percentInputToRate`/`rateToPercentInput` 精确转换字符串。
 - `utils/recalculate.ts` 的 `refreshPosition(scope, options)` 统一重算确认、防重、请求与失败分层；`isPositionRefreshing(scope)` 供两处入口绑定加载状态。
@@ -281,4 +281,54 @@ const sellPct = calcSellVsBuyPercent(row.sellPrice, row.buyPrice)
 
 // 正确：传入按成本降序排列的高价亏损批 ID 列表，按高价核销字典序优先比较后再比较总数量与接近 0%。
 best = pickBetterSolution(best, candidate, priorityLossLotIds)
+```
+
+## 12. 卖出配对手动关联买入批次契约
+
+### 12.1 适用范围
+
+适用于卖出配对工作台（`SellMatchDrawer.vue`）、手动关联纯逻辑工具（`utils/manualSellMatch.ts`）以及个股详情页持仓批次卖出入口（`LotTable.vue`、`SecurityDetailPanel.vue`）。后端继续复用既有 `POST /api/v1/trades/sell/preview` 与 `POST /api/v1/trades/sell` 的 `matches` 参数，不修改后端代码与 `RecalculationService.rebuild`。
+
+### 12.2 签名
+
+- `ManualSellMatchItem = { lotId: string; matchedQty: string }`、`SellMatchMode = 'EQUAL' | 'MANUAL'`（位于 `frontend/src/utils/manualSellMatch.ts`）。
+- `LotTable.vue`：`sell` 事件升级为发出 `LotSellPayload = { qty: string; matches: ManualSellMatchItem[] }`；单批次行传该批次，同价合并组传组内全部 `OPEN` 子批次。
+- `SellMatchDrawer.vue`：新增可选 prop `initialMatches?: ManualSellMatchItem[]`；有非空 `initialMatches` 打开时自动进入 `MANUAL` 模式并预选对应批次，否则默认进入 `EQUAL` 模式。
+
+### 12.3 契约
+
+- **模式切换与防呆**：支持「自动等量配对 / 手动关联批次」切换；将 `mode` 与手动勾选指纹（`serializeManualSelectionsKey`）纳入 `PreviewInput.key`，任意模式切换、批次勾选、单批数量、总卖出量、价格、时间或费用变化均立即失效旧预览并禁用「确认卖出」。
+- **精确十进制校验**：手动模式合计、差额与总量匹配校验全部使用 `BigInt` 4 位定点数（`QTY_SCALE = 4`），禁止使用 JS `Number` 相加（避免 `0.1 + 0.2 !== 0.3`）；A 股（`allowDecimalQty = false`）限制单批数量为整数，基金/美股支持最多 4 位小数。
+- **快捷交互与自动转手动**：首次勾选批次默认填入该批可用量，输入数量自动勾选；提供单行「填满」、「同步为卖出数量」、「清空选择」；在自动预览结果区提供「转为手动调整」按钮，将自动配对结果直接带入手动模式微调。
+- **重算边界提示**：手动模式明确提示「如后续编辑历史成交并执行『重新计算』，系统仍按默认等量配对重放」。
+- **移动端适配**：桌面端使用紧凑表格，移动端（`isMobile`）使用 `.m-manual-list` 卡片列表，保持零横向溢出。
+
+### 12.4 校验与状态矩阵
+
+| 条件 | 界面行为 |
+|---|---|
+| 顶部「卖出配对」入口打开 | 默认 `EQUAL` 模式，清空手动预选 |
+| `LotTable` 单批或合并组点击「卖出」 | 自动切至 `MANUAL` 模式并预选对应批次与可用量，同步预填总卖出量 |
+| 手动模式未选批次 / 单批超可用量 / 总量不匹配 | 前端 `ElMessage.warning` 拦截提示，不发无效预览请求 |
+| 所选批次买入时间晚于当前填写卖出时间 | 批次行显示「晚于卖出时间」提示标签，最终校验以服务端为准 |
+| 自动预览后点击「转为手动调整」 | 切至 `MANUAL` 模式并保留自动配对批次与数量，旧预览失效待重新预览 |
+
+### 12.5 正常、边界与错误示例
+
+- 正常：选中两批分别填 `0.1` 与 `0.2`，总卖出量 `0.3`，`BigInt` 定点校验精确通过并向 `/trades/sell/preview` 发送 `matches`。
+- 边界：同价合并组含 2 笔 `OPEN` 批次（200 + 100），点击合并行「卖出」直接进入手动模式并勾选这 2 批（200、100）且总量为 `300`。
+- 错误：用 `Number` 累加 `0.1 + 0.2` 与 `0.3` 做严格相等比较导致合法小数配对被误拦截；或切换模式后未失效旧 `preview` 导致提交错误批次。
+
+### 12.6 必须测试
+
+- 单元测试（`frontend/e2e/manual_sell_match.unit.spec.ts`）覆盖 4 位定点数解析/格式化、`filterSellableLots`、精确小数相加与非法拦截、预选与自动转手动截断、未来批次检测及选择指纹变化。
+
+### 12.7 错误与正确写法
+
+```ts
+// 错误：仅把表单主字段纳入预览快照 key，修改手动勾选批次后仍可点击「确认卖出」。
+// const key = JSON.stringify([form.qty, form.price, form.executedAt])
+
+// 正确：将 matchMode 与手动勾选指纹纳入 PreviewInput.key，任一变更自动失效旧预览。
+const manualKey = mode === 'MANUAL' ? serializeManualSelectionsKey(sellableLots.value, manualSelections.value) : ''
 ```

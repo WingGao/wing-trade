@@ -4,7 +4,14 @@ import type { TableInstance } from 'element-plus'
 import type { Currency, Lot, Quote } from '../api/types'
 import { formatDateTime, formatMoney, formatPercent, formatQuantity, formatTargetPercent, priceDigits, quantityUnit, trendClass } from '../utils/format'
 import { buildLotDisplayRows, type LotDisplayRow } from '../utils/lotMerge'
+import type { ManualSellMatchItem } from '../utils/manualSellMatch'
 import { useViewport } from '../utils/viewport'
+
+/** 批次行点击「卖出」时抛出的预选载荷（总量与对应批次明细）。 */
+export interface LotSellPayload {
+  qty: string
+  matches: ManualSellMatchItem[]
+}
 
 const props = withDefaults(defineProps<{
   lots: Lot[]
@@ -16,7 +23,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   mergeByPrice: true,
 })
-const emit = defineEmits<{ setTarget: [lot: Lot]; sell: [remainingQty: string] }>()
+const emit = defineEmits<{ setTarget: [lot: Lot]; sell: [payload: LotSellPayload] }>()
 const { isMobile } = useViewport()
 const tableRef = ref<TableInstance | null>(null)
 const expandedMobileKeys = ref<Record<string, boolean>>({})
@@ -86,6 +93,14 @@ function toggleMobileGroup(rowKey: string): void {
 /** 返回移动端合并卡片当前是否已展开。 */
 function isMobileGroupExpanded(rowKey: string): boolean {
   return Boolean(expandedMobileKeys.value[rowKey])
+}
+
+/** 根据单批次或合并组行构造预选卖出载荷并通知父组件打开手动关联工作台。 */
+function emitSellRow(row: LotDisplayRow): void {
+  const matches: ManualSellMatchItem[] = row.lots
+    .filter((lot) => lot.status === 'OPEN')
+    .map((lot) => ({ lotId: lot.id, matchedQty: lot.remainingQty }))
+  emit('sell', { qty: row.remainingQty, matches })
 }
 </script>
 <template>
@@ -196,7 +211,7 @@ function isMobileGroupExpanded(rowKey: string): boolean {
     <el-table-column label="操作" width="76">
       <template #default="{ row }">
         <div v-if="row.status === 'OPEN'" class="lot-actions">
-          <el-button link type="danger" @click="emit('sell', row.remainingQty)">卖出</el-button>
+          <el-button link type="danger" @click="emitSellRow(row)">卖出</el-button>
           <el-button v-if="!row.isMerged && row.lot" link type="primary" @click="emit('setTarget', row.lot)">设置</el-button>
           <el-button v-else link type="primary" @click="toggleDesktopGroup(row)">明细</el-button>
         </div>
@@ -223,7 +238,7 @@ function isMobileGroupExpanded(rowKey: string): boolean {
           <span class="m-lot-time num">{{ formatDateTime(row.executedAt) }}</span>
         </div>
         <div v-if="row.status === 'OPEN'" class="m-lot-actions">
-          <el-button link type="danger" size="small" @click="emit('sell', row.remainingQty)">卖出</el-button>
+          <el-button link type="danger" size="small" @click="emitSellRow(row)">卖出</el-button>
           <el-button v-if="!row.isMerged && row.lot" link type="primary" size="small" @click="emit('setTarget', row.lot)">设置</el-button>
         </div>
       </div>
@@ -285,7 +300,7 @@ function isMobileGroupExpanded(rowKey: string): boolean {
               <span class="m-lot-time num">{{ formatDateTime(child.executedAt) }}</span>
             </div>
             <div v-if="child.status === 'OPEN'" class="m-lot-actions">
-              <el-button link type="danger" size="small" @click="emit('sell', child.remainingQty)">卖出</el-button>
+              <el-button link type="danger" size="small" @click="emitSellRow(child)">卖出</el-button>
               <el-button v-if="child.lot" link type="primary" size="small" @click="emit('setTarget', child.lot)">设置</el-button>
             </div>
           </div>
