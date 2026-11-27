@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
+- **Total Sessions**: 32
 - **Last Active**: 2026-11-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~760 | Active |
+| `journal-1.md` | ~782 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-11-27 | 回本卖出弹窗新增匹配策略切换 | `a135c28` | `master` |
 | 31 | 2026-11-27 | 策略网格价格百分比与开关及站点改名 | `554087d` | `master` |
 | 30 | 2026-11-26 | 个股详情页回本卖出测算 | `05d7a97` | `master` |
 | 29 | 2026-11-26 | 个股详情页策略表、Markdown/CSV导入及长桥分时接入 | `f6cae78`, `97ebd2c` | `master` |

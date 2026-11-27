@@ -758,3 +758,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 32: 回本卖出弹窗新增匹配策略切换
+<!-- trellis-session: v=2 fp=454dbf2230abbecb -->
+
+**Date**: 2026-11-27
+**Task**: 回本卖出弹窗新增匹配策略切换
+**Branch**: `master`
+
+### Summary
+
+在回本卖出测算算法与弹窗中新增「优先消高价（深亏优先）」与「优先多卖（浅亏优先）」策略切换，补充单元测试并同步前端代码规范契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a135c28` | feat(frontend): 回本卖出弹窗新增优先消高价与优先多卖策略切换 |
+
+### Status
+
+[OK] **Completed**
