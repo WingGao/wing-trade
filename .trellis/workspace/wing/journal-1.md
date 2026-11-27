@@ -780,3 +780,25 @@ Implemented isolated USD accounts and US equity/ETF support. Added US market val
 ### Status
 
 [OK] **Completed**
+
+
+## Session 33: 卖出配对工作台支持手动关联买入批次
+<!-- trellis-session: v=2 fp=3dc732ac0cc80aed -->
+
+**Date**: 2026-11-27
+**Task**: 卖出配对工作台支持手动关联买入批次
+**Branch**: `master`
+
+### Summary
+
+前端卖出配对工作台新增自动/手动模式切换、精确4位定点数量校验、自动预览一键转手动及持仓批次行卖出直达预选，并补充单元测试与前端契约文档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ea17ffc` | feat(frontend): 卖出配对工作台支持手动关联买入批次与批次行直达预选 |
+
+### Status
+
+[OK] **Completed**
