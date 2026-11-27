@@ -176,3 +176,56 @@ holdingSummary.value = result.summary
 const buyPrice = resolveLotBuyPrice(lot)
 const groupKey = `${lot.status}|${buyPrice}`
 ```
+
+## 10. 买卖策略网格价格百分比展示与开关契约
+
+### 10.1 适用范围
+
+适用于个股详情（独立页与 PC 首页右栏内嵌详情）中的买卖策略网格组件（`SecurityStrategyCard.vue`、`utils/strategyPercent.ts`、`stores/preferences.ts`）。
+
+### 10.2 签名
+
+- `usePreferencesStore().showStrategyPercent`：布尔偏好，默认 `true`，持久化于 `localStorage` 键 `wing-trade:showStrategyPercent`；提供 `toggleShowStrategyPercent()`。
+- `calcRelativePercent(targetPrice, basePrice): string | null`、`calcBuyVsCurrentPercent(buyPrice, currentPrice): string | null`、`calcSellVsBuyPercent(sellPrice, buyPrice): string | null`（位于 `frontend/src/utils/strategyPercent.ts`）。
+- `SecurityStrategyCard.vue`：桌面端工具栏提供「显示百分比」开关，移动端头部操作栏提供「百分比」开关，均绑定 `preferences.showStrategyPercent`。
+
+### 10.3 契约
+
+- **计算口径**：
+  - 买入价相对现价：`((buyPrice - currentPrice) / currentPrice) * 100`，展示文案为 `较现价 ±X.XX%`（负值表示买入价低于现价，需回调触达）。
+  - 卖出价相对买入价：`((sellPrice - buyPrice) / buyPrice) * 100`，展示文案为 `较买价 ±X.XX%`（正值表示该档网格预期价差涨幅）。
+- **格式化与颜色**：统一复用 `formatSignedPercent` 与 `trendClass`（全局红涨绿跌 `.up` / `.down` / `.neutral`）；绝对值小于 `1e-9` 的极小数归一化为 `'0'`，避免出现 `-0.00%`。
+- **空值与开关行为**：任一参与计算的价格为空或非正数时返回 `null` 且不渲染百分比副行；当 `showStrategyPercent` 为 `false` 时隐藏全部百分比展示，仅保留纯价格。
+
+### 10.4 校验与状态矩阵
+
+| 条件 | 界面行为 |
+|---|---|
+| 首次进入或未存储偏好 | `showStrategyPercent=true`，默认显示百分比 |
+| 买入价低于现价（如 9.50 vs 10.00） | 买入价下方显示绿色 `较现价 -5.00%` |
+| 买入价高于现价（如 10.50 vs 10.00） | 买入价下方显示红色 `较现价 +5.00%` |
+| 卖出价高于买入价（如 11.50 vs 10.00） | 卖出价下方显示红色 `较买价 +15.00%` |
+| 实时现价缺失（`quote.lastPrice` 为空） | 不渲染「较现价」副行，不影响「较买价」展示 |
+| 仅填卖出价未填买入价 | 不渲染「较买价」副行，不产生 `NaN`/`Infinity` |
+| 关闭「显示百分比」/「百分比」开关 | 桌面端与移动端均隐藏百分比副行，并持久化偏好 |
+
+### 10.5 正常、边界与错误示例
+
+- 正常：现价 `10.00`、买入价 `9.50`、卖出价 `11.50`，展示 `较现价 -5.00%` 与 `较买价 +15.00%`。
+- 边界：基金 4 位净值（`1.1234` → `1.2345`）正确输出 `+9.89%`；买入价等于现价时输出中性 `0.00%`。
+- 错误：在模板内直接写 `(Number(row.sellPrice) - Number(row.buyPrice)) / Number(row.buyPrice)` 且未校验 `base <= 0`，导致单边档位显示 `Infinity%` 或 `NaN%`。
+
+### 10.6 必须测试
+
+- 单元测试（`frontend/e2e/strategy_percent.unit.spec.ts`）覆盖买入价 vs 现价（低/高/等）、卖出价 vs 买入价（高/低/四位净值）以及缺失/非正价格返回 `null` 的边界场景。
+
+### 10.7 错误与正确写法
+
+```ts
+// 错误：未判空或未校验正数直接相除，单边策略行会产生 NaN/Infinity。
+// const pct = ((Number(row.sellPrice) - Number(row.buyPrice)) / Number(row.buyPrice)) * 100
+
+// 正确：通过纯函数统一解析正数、处理极小零值并返回可安全判空的百分比字符串。
+const buyPct = calcBuyVsCurrentPercent(row.buyPrice, currentPriceNum.value)
+const sellPct = calcSellVsBuyPercent(row.sellPrice, row.buyPrice)
+```

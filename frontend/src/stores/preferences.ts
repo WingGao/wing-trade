@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 
 const SHOW_WATCHLIST_STORAGE_KEY = 'wing-trade:showWatchlist'
 const MERGE_LOTS_BY_PRICE_STORAGE_KEY = 'wing-trade:mergeLotsByPrice'
+const SHOW_STRATEGY_PERCENT_STORAGE_KEY = 'wing-trade:showStrategyPercent'
 
 /** 从本地存储读取布尔偏好，缺失或不可用时回退默认值。 */
 function readStoredBoolean(key: string, fallback: boolean): boolean {
@@ -35,6 +36,7 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const includeClosed = ref(false)
   const showWatchlist = ref(readStoredBoolean(SHOW_WATCHLIST_STORAGE_KEY, true))
   const mergeLotsByPrice = ref(readStoredBoolean(MERGE_LOTS_BY_PRICE_STORAGE_KEY, true))
+  const showStrategyPercent = ref(readStoredBoolean(SHOW_STRATEGY_PERCENT_STORAGE_KEY, true))
   const redUp = ref(true)
 
   /** 切换是否显示历史已结清仓位。 */
@@ -52,6 +54,11 @@ export const usePreferencesStore = defineStore('preferences', () => {
     mergeLotsByPrice.value = !mergeLotsByPrice.value
   }
 
+  /** 切换买卖策略网格是否显示买入价/卖出价相对百分比。 */
+  const toggleShowStrategyPercent = () => {
+    showStrategyPercent.value = !showStrategyPercent.value
+  }
+
   watch(showWatchlist, (next) => {
     writeStoredBoolean(SHOW_WATCHLIST_STORAGE_KEY, next)
   })
@@ -60,13 +67,19 @@ export const usePreferencesStore = defineStore('preferences', () => {
     writeStoredBoolean(MERGE_LOTS_BY_PRICE_STORAGE_KEY, next)
   })
 
+  watch(showStrategyPercent, (next) => {
+    writeStoredBoolean(SHOW_STRATEGY_PERCENT_STORAGE_KEY, next)
+  })
+
   return {
     includeClosed,
     showWatchlist,
     mergeLotsByPrice,
+    showStrategyPercent,
     redUp,
     toggleClosed,
     toggleWatchlist,
     toggleMergeLotsByPrice,
+    toggleShowStrategyPercent,
   }
 })

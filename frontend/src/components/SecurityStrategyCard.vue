@@ -11,8 +11,17 @@ import type {
   StrategyRowStatus,
   StrategyRowUpdate,
 } from '../api/types'
-import { formatMoney, formatQuantity, priceDigits, quantityUnit } from '../utils/format'
+import {
+  formatMoney,
+  formatQuantity,
+  formatSignedPercent,
+  priceDigits,
+  quantityUnit,
+  trendClass,
+} from '../utils/format'
+import { usePreferencesStore } from '../stores/preferences'
 import { copyTextToClipboard, STRATEGY_TABLE_AI_PROMPT } from '../utils/strategyMarkdown'
+import { calcBuyVsCurrentPercent, calcSellVsBuyPercent } from '../utils/strategyPercent'
 import { useViewport } from '../utils/viewport'
 import StrategyMarkdownImportDialog from './StrategyMarkdownImportDialog.vue'
 import StrategyRowDialog from './StrategyRowDialog.vue'
@@ -31,6 +40,7 @@ const props = withDefaults(defineProps<{
 })
 
 const { isMobile } = useViewport()
+const preferences = usePreferencesStore()
 
 const rows = ref<StrategyRow[]>([])
 const loading = ref(false)
@@ -73,6 +83,16 @@ function isSellHit(row: StrategyRow): boolean {
   if (row.status === 'COMPLETED' || currentPriceNum.value === null || !row.sellPrice) return false
   const target = Number(row.sellPrice)
   return Number.isFinite(target) && target > 0 && currentPriceNum.value >= target
+}
+
+/** 计算策略买入价相对当前现价的百分比字符串，无现价或无买价时返回 null。 */
+function buyVsCurrentPct(row: StrategyRow): string | null {
+  return calcBuyVsCurrentPercent(row.buyPrice, currentPriceNum.value)
+}
+
+/** 计算策略卖出价相对买入价的百分比字符串，缺少任一价格时返回 null。 */
+function sellVsBuyPct(row: StrategyRow): string | null {
+  return calcSellVsBuyPercent(row.sellPrice, row.buyPrice)
 }
 
 /** 加载当前标的的买卖策略表（按用户+标的维度共享，并用代次防止切换串台）。 */
@@ -227,6 +247,12 @@ async function handleClearAll(): Promise<void> {
           <span class="muted">共 {{ rows.length }} 档 · 跨账户共享</span>
         </div>
         <div class="toolbar strategy-toolbar">
+          <el-switch
+            v-model="preferences.showStrategyPercent"
+            :size="embedded ? 'small' : 'default'"
+            active-text="显示百分比"
+            aria-label="显示策略价格百分比"
+          />
           <el-button-group :size="embedded ? 'small' : 'default'">
             <el-button @click="handleCopyPrompt">复制 AI 提示词</el-button>
             <el-button @click="promptDialogVisible = true">查看</el-button>
@@ -262,13 +288,21 @@ async function handleClearAll(): Promise<void> {
 
       <el-table v-else :data="rows" size="small" stripe class="strategy-table">
         <el-table-column type="index" label="#" width="42" />
-        <el-table-column label="买入价" min-width="112">
+        <el-table-column label="买入价" min-width="140">
           <template #default="{ row }">
-            <div class="price-cell num">
-              <span :class="{ 'hit-buy': isBuyHit(row) }">
-                {{ row.buyPrice ? formatMoney(row.buyPrice, currency, digits) : '—' }}
+            <div class="price-cell-wrap num">
+              <div class="price-cell">
+                <span :class="{ 'hit-buy': isBuyHit(row) }">
+                  {{ row.buyPrice ? formatMoney(row.buyPrice, currency, digits) : '—' }}
+                </span>
+                <el-tag v-if="isBuyHit(row)" size="small" type="success" effect="dark" class="hit-tag">到买价</el-tag>
+              </div>
+              <span
+                v-if="preferences.showStrategyPercent && buyVsCurrentPct(row) !== null"
+                :class="['price-pct', trendClass(buyVsCurrentPct(row))]"
+              >
+                较现价 {{ formatSignedPercent(buyVsCurrentPct(row)) }}
               </span>
-              <el-tag v-if="isBuyHit(row)" size="small" type="success" effect="dark" class="hit-tag">到买价</el-tag>
             </div>
           </template>
         </el-table-column>
@@ -277,13 +311,21 @@ async function handleClearAll(): Promise<void> {
             <span class="num">{{ row.buyQty ? formatQuantity(row.buyQty, qtyTarget) : '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="卖出价" min-width="112">
+        <el-table-column label="卖出价" min-width="140">
           <template #default="{ row }">
-            <div class="price-cell num">
-              <span :class="{ 'hit-sell': isSellHit(row) }">
-                {{ row.sellPrice ? formatMoney(row.sellPrice, currency, digits) : '—' }}
+            <div class="price-cell-wrap num">
+              <div class="price-cell">
+                <span :class="{ 'hit-sell': isSellHit(row) }">
+                  {{ row.sellPrice ? formatMoney(row.sellPrice, currency, digits) : '—' }}
+                </span>
+                <el-tag v-if="isSellHit(row)" size="small" type="danger" effect="dark" class="hit-tag">到卖价</el-tag>
+              </div>
+              <span
+                v-if="preferences.showStrategyPercent && sellVsBuyPct(row) !== null"
+                :class="['price-pct', trendClass(sellVsBuyPct(row))]"
+              >
+                较买价 {{ formatSignedPercent(sellVsBuyPct(row)) }}
               </span>
-              <el-tag v-if="isSellHit(row)" size="small" type="danger" effect="dark" class="hit-tag">到卖价</el-tag>
             </div>
           </template>
         </el-table-column>
@@ -325,6 +367,12 @@ async function handleClearAll(): Promise<void> {
     <div class="m-section-head m-strategy-head">
       <span>买卖策略表 <span class="m-section-sub">{{ rows.length }} 档</span></span>
       <div class="m-strategy-tools">
+        <el-switch
+          v-model="preferences.showStrategyPercent"
+          size="small"
+          active-text="百分比"
+          aria-label="显示策略价格百分比"
+        />
         <el-button size="small" plain @click="handleCopyPrompt">复制提示词</el-button>
         <el-button size="small" type="primary" plain @click="importDialogVisible = true">导入</el-button>
         <el-button size="small" @click="openCreateDialog">新增</el-button>
@@ -376,6 +424,12 @@ async function handleClearAll(): Promise<void> {
               <strong :class="['m-strategy-val', { 'hit-buy': isBuyHit(row) }]">
                 {{ row.buyPrice ? formatMoney(row.buyPrice, currency, digits) : '—' }}
               </strong>
+              <span
+                v-if="preferences.showStrategyPercent && buyVsCurrentPct(row) !== null"
+                :class="['m-strategy-pct', trendClass(buyVsCurrentPct(row))]"
+              >
+                较现价 {{ formatSignedPercent(buyVsCurrentPct(row)) }}
+              </span>
               <span class="m-strategy-sub">
                 {{ row.buyQty ? `${formatQuantity(row.buyQty, qtyTarget)} ${unitLabel}` : '—' }}
               </span>
@@ -385,6 +439,12 @@ async function handleClearAll(): Promise<void> {
               <strong :class="['m-strategy-val', { 'hit-sell': isSellHit(row) }]">
                 {{ row.sellPrice ? formatMoney(row.sellPrice, currency, digits) : '—' }}
               </strong>
+              <span
+                v-if="preferences.showStrategyPercent && sellVsBuyPct(row) !== null"
+                :class="['m-strategy-pct', trendClass(sellVsBuyPct(row))]"
+              >
+                较买价 {{ formatSignedPercent(sellVsBuyPct(row)) }}
+              </span>
               <span class="m-strategy-sub">
                 {{ row.sellQty ? `${formatQuantity(row.sellQty, qtyTarget)} ${unitLabel}` : '—' }}
               </span>
@@ -452,7 +512,9 @@ async function handleClearAll(): Promise<void> {
 }
 .strategy-empty p { margin: 0 0 12px; font-size: 13px; }
 .strategy-empty-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.price-cell-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .price-cell { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.price-pct { font-size: 11px; line-height: 1.25; font-weight: 500; }
 .hit-buy { color: #16a34a; font-weight: 700; }
 .hit-sell { color: #dc2626; font-weight: 700; }
 .hit-tag { height: 18px; line-height: 16px; padding: 0 4px; font-size: 11px; }
@@ -496,6 +558,7 @@ async function handleClearAll(): Promise<void> {
 }
 .m-strategy-label { font-size: 11px; color: #64748b; }
 .m-strategy-val { font-size: 14px; font-weight: 600; color: #0f172a; overflow-wrap: anywhere; }
+.m-strategy-pct { font-size: 11px; line-height: 1.25; font-weight: 500; }
 .m-strategy-sub { font-size: 12px; color: #475569; }
 .m-strategy-note {
   margin: 6px 0 0;

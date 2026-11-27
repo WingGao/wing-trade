@@ -48,7 +48,7 @@
     <el-aside width="220px" class="sidebar">
       <div class="brand">
         <span class="brand-mark">翼</span>
-        <div><strong>翼·交易账本</strong><small>Portfolio Journal</small></div>
+        <div><strong>交易账本</strong><small>Portfolio Journal</small></div>
       </div>
       <el-menu :default-active="route.path" router class="nav" background-color="transparent" text-color="#a7b1c2" active-text-color="#fff">
         <el-menu-item index="/dashboard">总览 Dashboard</el-menu-item>
@@ -62,7 +62,7 @@
       <el-header class="topbar">
         <div>
           <span class="eyebrow">自托管投资工作台</span>
-          <h1>{{ route.path === '/dashboard' ? '总览' : '投资账本' }}</h1>
+          <h1>{{ route.path === '/dashboard' ? '总览' : '交易账本' }}</h1>
         </div>
         <div class="topbar-user" v-if="auth.user">
           <div class="topbar-account">
@@ -124,7 +124,7 @@ let accountSwitchSequence = 0
 
 const isPublicRoute = computed(() => Boolean(route.meta.public))
 /** 计算当前页面标题，供移动端极简顶栏展示。 */
-const pageTitle = computed(() => (route.path === '/dashboard' ? '总览' : String(route.meta.title ?? '投资账本')))
+const pageTitle = computed(() => (route.path === '/dashboard' ? '总览' : String(route.meta.title ?? '交易账本')))
 
 /** 判断底部导航项是否处于当前激活路由。 */
 function isNavActive(path: string): boolean {

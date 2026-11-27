@@ -200,7 +200,7 @@ class SmtpEmailSender:
     def send_login_code(self, to_email: str, code: str, *, expires_minutes: int) -> None:
         """构造并发送中文登录验证码邮件。"""
         message = EmailMessage()
-        message["Subject"] = "【A股交易账本】您的登录验证码"
+        message["Subject"] = "【交易账本】您的登录验证码"
         message["From"] = self.sender_address
         message["To"] = to_email
         message.set_content(
@@ -221,12 +221,12 @@ class SmtpEmailSender:
         """构造并发送管理员邀请激活提示邮件。"""
         greeting = f"{display_name}，您好：" if display_name else "您好："
         message = EmailMessage()
-        message["Subject"] = "【A股交易账本】您已获邀使用系统"
+        message["Subject"] = "【交易账本】您已获邀使用系统"
         message["From"] = self.sender_address
         message["To"] = to_email
         message.set_content(
             f"{greeting}\n\n"
-            f"管理员（{inviter_email}）已邀请您使用 A 股交易账本。\n"
+            f"管理员（{inviter_email}）已邀请您使用交易账本。\n"
             f"请直接前往系统登录页面，输入本邮箱（{to_email}）获取验证码即可完成首次激活并登录。\n"
         )
         self._deliver(message, mail_type="invite_notice")

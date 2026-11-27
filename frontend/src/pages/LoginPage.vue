@@ -4,7 +4,7 @@
       <div class="auth-brand">
         <span class="brand-mark">翼</span>
         <div>
-          <strong>A 股交易账本</strong>
+          <strong>交易账本</strong>
           <small>Portfolio Journal · 受控多用户工作台</small>
         </div>
       </div>
